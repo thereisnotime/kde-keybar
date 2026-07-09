@@ -299,8 +299,15 @@ def watch_keyboard_visibility(win):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="kde-keybar", description=__doc__.strip().splitlines()[0])
     ap.add_argument("-c", "--config", default=DEFAULT_CONFIG_PATH, help="path to config JSON")
+    ap.add_argument("--list-themes", action="store_true", help="list built-in themes and exit")
     ap.add_argument("-V", "--version", action="version", version=f"kde-keybar {__version__}")
     args = ap.parse_args(argv)
+
+    if args.list_themes:
+        print("Built-in themes (set \"theme\": \"<name>\" in the config):")
+        for name in THEMES:
+            print(f"  {name}")
+        return
 
     cfg = load_config(args.config)
     win = build_window(cfg, make_sender(cfg))
