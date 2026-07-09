@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=KDE Keybar
+Comment=On-screen terminal key strip that shows with the virtual keyboard
+Exec=env GDK_BACKEND=wayland /usr/bin/kde-keybar
+X-KDE-autostart-phase=2
+OnlyShowIn=KDE;
+NoDisplay=true
+Terminal=false

@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+kde-keybar — a layer-shell strip of injectable keys (Esc / Tab / Ctrl+C / arrows / …)
+that appears together with the on-screen keyboard on KDE Plasma Wayland.
+
+Why it exists: KWin refuses the Wayland virtual-keyboard / input-method protocols to
+external clients, so on-screen keyboards like wvkbd or onboard can't run and the built-in
+ones (Plasma Keyboard, Qt Virtual Keyboard, Maliit) only *commit text* — they cannot send
+Ctrl+C / Esc / Alt-chords to a terminal. kde-keybar sidesteps that: keys are injected via
+ydotool (kernel uinput, which KWin can't block), and the bar shows/hides by watching KWin's
+generic org.kde.kwin.VirtualKeyboard.visible signal — so it works with ANY of those OSKs.
+
+Config (JSON): $XDG_CONFIG_HOME/kde-keybar.json (default ~/.config/kde-keybar.json).
+A commented default is written on first run. Env overrides: KEYBAR_MARGIN, YDOTOOL_SOCKET.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("GtkLayerShell", "0.1")
+from gi.repository import Gtk, Gdk, GtkLayerShell, Gio, GLib  # noqa: E402
+
+__version__ = "0.1.0"
+
+# ---- evdev key codes (see /usr/include/linux/input-event-codes.h) ----
+KEYCODES = {
+    "ESC": 1, "TAB": 15, "ENTER": 28, "SPACE": 57, "BACKSPACE": 14, "DELETE": 111,
+    "LCTRL": 29, "RCTRL": 97, "LALT": 56, "RALT": 100, "LSHIFT": 42, "RSHIFT": 54,
+    "LSUPER": 125, "RSUPER": 126, "CAPSLOCK": 58,
+    "UP": 103, "DOWN": 108, "LEFT": 105, "RIGHT": 106,
+    "HOME": 102, "END": 107, "PGUP": 104, "PGDN": 109, "INSERT": 110,
+    "F1": 59, "F2": 60, "F3": 61, "F4": 62, "F5": 63, "F6": 64,
+    "F7": 65, "F8": 66, "F9": 67, "F10": 68, "F11": 87, "F12": 88,
+    "MINUS": 12, "EQUAL": 13, "SLASH": 53, "BACKSLASH": 43, "GRAVE": 41,
+    "SEMICOLON": 39, "APOSTROPHE": 40, "LEFTBRACE": 26, "RIGHTBRACE": 27,
+    "COMMA": 51, "DOT": 52,
+}
+for _i, _c in enumerate("1234567890"):
+    KEYCODES[_c] = 2 + _i          # '1'..'0' -> 2..11
+KEYCODES.update({
+    "A": 30, "B": 48, "C": 46, "D": 32, "E": 18, "F": 33, "G": 34, "H": 35,
+    "I": 23, "J": 36, "K": 37, "L": 38, "M": 50, "N": 49, "O": 24, "P": 25,
+    "Q": 16, "R": 19, "S": 31, "T": 20, "U": 22, "V": 47, "W": 17, "X": 45,
+    "Y": 21, "Z": 44,
+})
+
+DEFAULT_CONFIG_PATH = os.path.join(
+    os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+    "kde-keybar.json")
+
+DEFAULT_CONFIG = {
+    "position": "bottom",             # "bottom" (above OSK) or "top"
+    "visibility": "keyboard",         # "keyboard" (auto-hide with OSK) or "always"
+    "font_px": 20,
+    "button_height_px": 54,           # thickness of the strip
+    "gap_px": 0,                      # extra px between bar and keyboard (+ up / - down)
+    "margin_px": None,                # hard override of the bottom margin; null = auto
+    "keyboard_height_fraction": {"landscape": 0.30, "portrait": 0.24},
+    "ydotool_socket": "/run/ydotoold.socket",
+    "buttons": [
+        {"label": "Esc",     "keys": ["ESC"]},
+        {"label": "Tab",     "keys": ["TAB"]},
+        {"label": "Alt+Tab", "keys": ["LALT", "TAB"]},
+        {"label": "^C",      "keys": ["LCTRL", "C"]},
+        {"label": "^B",      "keys": ["LCTRL", "B"]},
+        {"label": "^D",      "keys": ["LCTRL", "D"]},
+        {"label": "^L",      "keys": ["LCTRL", "L"]},
+        {"label": "^R",      "keys": ["LCTRL", "R"]},
+        {"label": "←",       "keys": ["LEFT"]},
+        {"label": "↓",       "keys": ["DOWN"]},
+        {"label": "↑",       "keys": ["UP"]},
+        {"label": "→",       "keys": ["RIGHT"]},
+        {"label": "⏎",       "keys": ["ENTER"]},
+    ],
+}
+
+
+def load_config(path):
+    cfg = dict(DEFAULT_CONFIG)
+    try:
+        with open(path) as f:
+            cfg.update(json.load(f))
+    except FileNotFoundError:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+            print(f"kde-keybar: wrote default config to {path}", file=sys.stderr)
+        except OSError:
+            pass
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"kde-keybar: bad config {path}: {e}; using defaults", file=sys.stderr)
+    return cfg
+
+
+def resolve_keys(names):
+    codes = []
+    for n in names:
+        c = KEYCODES.get(n) or KEYCODES.get(str(n).upper())
+        if c is None:
+            print(f"kde-keybar: unknown key '{n}'", file=sys.stderr)
+        else:
+            codes.append(c)
+    return codes
+
+
+def make_sender(cfg):
+    socket = os.environ.get("YDOTOOL_SOCKET", cfg["ydotool_socket"])
+
+    def send(codes):
+        seq = [f"{c}:1" for c in codes] + [f"{c}:0" for c in reversed(codes)]
+        try:
+            subprocess.Popen(["ydotool", "key", *seq],
+                             env=dict(os.environ, YDOTOOL_SOCKET=socket))
+        except FileNotFoundError:
+            print("kde-keybar: ydotool not found on PATH", file=sys.stderr)
+    return send
+
+
+def bottom_margin_px(cfg):
+    env = os.environ.get("KEYBAR_MARGIN")
+    if env and env.lstrip("-").isdigit():
+        return int(env)
+    gap = int(cfg.get("gap_px", 0))
+    if cfg.get("margin_px") is not None:
+        return int(cfg["margin_px"]) + gap
+    try:
+        disp = Gdk.Display.get_default()
+        mon = disp.get_primary_monitor() or disp.get_monitor(0)
+        g = mon.get_geometry()
+        portrait = g.height > g.width
+        fr = cfg["keyboard_height_fraction"]
+        frac = fr["portrait"] if portrait else fr["landscape"]
+        return int(g.height * frac) + gap
+    except Exception:
+        return 320 + gap
+
+
+def build_window(cfg, send):
+    win = Gtk.Window()
+    GtkLayerShell.init_for_window(win)
+    GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+    GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)  # never steal focus
+    GtkLayerShell.set_namespace(win, "kde-keybar")
+    GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.LEFT, True)
+    GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.RIGHT, True)
+    if cfg.get("position") == "top":
+        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.TOP, True)
+    else:
+        GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.BOTTOM, True)
+        GtkLayerShell.set_margin(win, GtkLayerShell.Edge.BOTTOM, bottom_margin_px(cfg))
+
+    flow = Gtk.FlowBox()          # wraps to more rows when the screen is narrow (portrait)
+    flow.set_selection_mode(Gtk.SelectionMode.NONE)
+    flow.set_homogeneous(True)
+    flow.set_max_children_per_line(max(1, len(cfg["buttons"])))
+    flow.set_min_children_per_line(1)
+    flow.set_row_spacing(4)
+    flow.set_column_spacing(4)
+    for m in ("top", "bottom", "start", "end"):
+        getattr(flow, f"set_margin_{m}")(4)
+
+    bh = int(cfg.get("button_height_px", 54))
+    for spec in cfg["buttons"]:
+        codes = resolve_keys(spec.get("keys", []))
+        b = Gtk.Button(label=spec.get("label", "?"))
+        b.set_can_focus(False)
+        b.set_size_request(-1, bh)
+        b.connect("clicked", lambda _b, c=codes: send(c))
+        flow.add(b)
+    flow.set_valign(Gtk.Align.END)
+    win.add(flow)
+
+    css = Gtk.CssProvider()
+    css.load_from_data((f"""
+        window {{ background: rgba(20,20,24,0.92); }}
+        button {{ font-size: {int(cfg.get('font_px', 20))}px; padding: 4px 6px; color: #eee;
+                  background: #33343a; border: 1px solid #4a4b52; border-radius: 8px; }}
+        button:hover {{ background: #44454c; }}
+        button:active {{ background: #5a6cff; }}
+    """).encode())
+    Gtk.StyleContext.add_provider_for_screen(
+        win.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    return win
+
+
+def watch_keyboard_visibility(win):
+    """Show/hide with KWin's OSK. KWin emits its own visibleChanged signal
+    (not the standard Properties.PropertiesChanged), so subscribe to that."""
+    bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+
+    def get_visible():
+        try:
+            r = bus.call_sync("org.kde.KWin", "/VirtualKeyboard",
+                              "org.freedesktop.DBus.Properties", "Get",
+                              GLib.Variant("(ss)", ("org.kde.kwin.VirtualKeyboard", "visible")),
+                              GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, -1, None)
+            return r.get_child_value(0).get_variant().get_boolean()
+        except GLib.Error:
+            return True
+
+    def refresh(*_):
+        win.show_all() if get_visible() else win.hide()
+
+    for member in ("visibleChanged", "enabledChanged", "activeChanged"):
+        bus.signal_subscribe("org.kde.KWin", "org.kde.kwin.VirtualKeyboard", member,
+                             "/VirtualKeyboard", None, Gio.DBusSignalFlags.NONE,
+                             lambda *a: refresh())
+    refresh()
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="kde-keybar", description=__doc__.strip().splitlines()[0])
+    ap.add_argument("-c", "--config", default=DEFAULT_CONFIG_PATH, help="path to config JSON")
+    ap.add_argument("-V", "--version", action="version", version=f"kde-keybar {__version__}")
+    args = ap.parse_args(argv)
+
+    cfg = load_config(args.config)
+    win = build_window(cfg, make_sender(cfg))
+    if cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"):
+        win.show_all()
+    else:
+        watch_keyboard_visibility(win)
+    win.connect("destroy", Gtk.main_quit)
+    Gtk.main()
+
+
+if __name__ == "__main__":
+    main()

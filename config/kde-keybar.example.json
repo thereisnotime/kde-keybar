@@ -1,0 +1,25 @@
+{
+  "position": "bottom",
+  "visibility": "keyboard",
+  "font_px": 20,
+  "button_height_px": 54,
+  "gap_px": 0,
+  "margin_px": null,
+  "keyboard_height_fraction": { "landscape": 0.30, "portrait": 0.24 },
+  "ydotool_socket": "/run/ydotoold.socket",
+  "buttons": [
+    { "label": "Esc",     "keys": ["ESC"] },
+    { "label": "Tab",     "keys": ["TAB"] },
+    { "label": "Alt+Tab", "keys": ["LALT", "TAB"] },
+    { "label": "^C",      "keys": ["LCTRL", "C"] },
+    { "label": "^B",      "keys": ["LCTRL", "B"] },
+    { "label": "^D",      "keys": ["LCTRL", "D"] },
+    { "label": "^L",      "keys": ["LCTRL", "L"] },
+    { "label": "^R",      "keys": ["LCTRL", "R"] },
+    { "label": "←",       "keys": ["LEFT"] },
+    { "label": "↓",       "keys": ["DOWN"] },
+    { "label": "↑",       "keys": ["UP"] },
+    { "label": "→",       "keys": ["RIGHT"] },
+    { "label": "⏎",       "keys": ["ENTER"] }
+  ]
+}

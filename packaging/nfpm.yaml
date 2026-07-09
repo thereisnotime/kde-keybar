@@ -1,0 +1,80 @@
+# nfpm config for kde-keybar
+# Produces both a .deb and an .rpm from the same source tree.
+# The src paths below are relative to the current working directory, so run
+# nfpm from the repository root.
+# Build with:
+#   VERSION=0.1.0 nfpm package -f packaging/nfpm.yaml -p deb -t dist/
+#   VERSION=0.1.0 nfpm package -f packaging/nfpm.yaml -p rpm -t dist/
+# Docs: https://nfpm.goreleaser.com
+
+name: kde-keybar
+arch: all
+platform: linux
+version: "${VERSION:-0.1.0}"
+section: utils
+priority: optional
+maintainer: thereisnotime
+homepage: https://github.com/thereisnotime/kde-keybar
+license: MIT
+description: |
+  On-screen key strip for KDE Plasma Wayland.
+  A row of tappable buttons (Esc, Tab, Ctrl+C, arrows and more) that shows up
+  alongside the on-screen keyboard and injects real key chords through ydotool
+  (kernel uinput). Handy on touch devices where a terminal needs keys the
+  virtual keyboard does not offer.
+
+# Files that are the same for every packager.
+contents:
+  - src: kde-keybar
+    dst: /usr/bin/kde-keybar
+    file_info:
+      mode: 0755
+  - src: data/kde-keybar.desktop
+    dst: /etc/xdg/autostart/kde-keybar.desktop
+  - src: data/ydotoold.service
+    dst: /usr/lib/systemd/system/ydotoold.service
+  - src: config/kde-keybar.example.json
+    dst: /usr/share/doc/kde-keybar/kde-keybar.example.json
+
+# Dependency names differ between distros, so set them per packager.
+overrides:
+  deb:
+    depends:
+      - python3
+      - python3-gi
+      - gir1.2-gtk-3.0
+      - gir1.2-gtklayershell-0.1
+      - ydotool
+    contents:
+      - src: kde-keybar
+        dst: /usr/bin/kde-keybar
+        file_info:
+          mode: 0755
+      - src: data/kde-keybar.desktop
+        dst: /etc/xdg/autostart/kde-keybar.desktop
+      - src: data/ydotoold.service
+        dst: /usr/lib/systemd/system/ydotoold.service
+      - src: config/kde-keybar.example.json
+        dst: /usr/share/doc/kde-keybar/kde-keybar.example.json
+      - src: LICENSE
+        dst: /usr/share/doc/kde-keybar/copyright
+  rpm:
+    depends:
+      - python3
+      - python3-gobject
+      - gtk3
+      - gtk-layer-shell
+      - ydotool
+    contents:
+      - src: kde-keybar
+        dst: /usr/bin/kde-keybar
+        file_info:
+          mode: 0755
+      - src: data/kde-keybar.desktop
+        dst: /etc/xdg/autostart/kde-keybar.desktop
+      - src: data/ydotoold.service
+        dst: /usr/lib/systemd/system/ydotoold.service
+      - src: config/kde-keybar.example.json
+        dst: /usr/share/doc/kde-keybar/kde-keybar.example.json
+      - src: LICENSE
+        dst: /usr/share/licenses/kde-keybar/LICENSE

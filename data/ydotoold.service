@@ -1,0 +1,14 @@
+[Unit]
+Description=ydotool daemon (root, user-accessible socket) for kde-keybar
+Documentation=man:ydotoold(8)
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/sbin/modprobe uinput
+# %i is passed by the packaging/install step as the target UID:GID that owns the socket.
+ExecStart=/usr/bin/ydotoold --socket-path=/run/ydotoold.socket --socket-own=1000:1000
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

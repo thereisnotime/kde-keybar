@@ -1,0 +1,23 @@
+# Ruff config for kde-keybar.
+# The main program is a single executable script named `kde-keybar` with no
+# .py extension, so it is added explicitly via extend-include below.
+
+target-version = "py311"
+line-length = 100
+
+# Make ruff pick up the extensionless main script in addition to *.py files.
+extend-include = ["kde-keybar"]
+
+[lint]
+# Pragmatic set for a single GTK script: pyflakes, pycodestyle, warnings,
+# import sorting, pyupgrade, and a few bugbear checks.
+select = ["E", "F", "W", "I", "UP", "B"]
+
+# Keep it non-draconian.
+ignore = [
+    "E501",  # line length is enforced by the formatter, not the linter
+]
+
+[format]
+quote-style = "double"
+indent-style = "space"
