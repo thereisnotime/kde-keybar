@@ -127,7 +127,7 @@ Config lives at `~/.config/kde-keybar.json` (respects `XDG_CONFIG_HOME`). It is 
 | `margin_px` | int or null | `null` | Hard override of the bottom margin in pixels. `null` means auto-compute from the OSK height. Added on top of `gap_px`. |
 | `keyboard_height_fraction` | object | `{ "landscape": 0.30, "portrait": 0.24 }` | Fraction of the screen height the OSK is assumed to cover, used to auto-place the bar above it. Selected by orientation. |
 | `ydotool_socket` | string | `"/run/ydotoold.socket"` | Path to the `ydotoold` socket. Overridden by the `YDOTOOL_SOCKET` env var. |
-| `theme` | string | `"dark"` | Built-in palette: `dark`, `light`, `nord`, `solarized`, `transparent`, `matrix`. |
+| `theme` | string | `"dark"` | Built-in palette (run `kde-keybar --list-themes`). |
 | `style` | object | `{}` | Overrides individual theme keys (see below). Set a few keys to tweak a theme, or all of them to bring your own. |
 | `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`. |
 
@@ -146,7 +146,9 @@ setting all the `style` keys:
 { "style": { "background": "rgba(0,0,0,0.4)", "button_bg": "#222", "button_fg": "#fff" } }
 ```
 
-Built-in themes: `dark` (default), `light`, `nord`, `solarized`, `transparent`, `matrix`.
+Built-in themes: `dark` (default), `light`, `nord`, `nord-light`, `solarized`, `transparent`,
+`matrix`, `dracula`, `gruvbox`, `gruvbox-light`, `catppuccin`, `tokyonight`, `rose-pine`,
+`monokai`, `onedark`. Run `kde-keybar --list-themes` to see the current set.
 
 ### `style` keys
 
@@ -245,6 +247,15 @@ bar keeps the last good config and logs a warning rather than crashing (run `--v
 ## Compatibility
 
 kde-keybar is built for KDE Plasma 6 on Wayland (KWin) and works alongside Plasma Keyboard, Qt Virtual Keyboard, and Maliit.
+
+### Companion on-screen keyboard
+
+kde-keybar is not a full keyboard: it provides the control keys the built-in ones can't send. Pair it with any KWin on-screen keyboard for text entry:
+
+- **Plasma Keyboard** (`plasma-keyboard`) is the stock default and the most stable choice.
+- **Maliit** (`maliit-keyboard`) is what we run, because its QML layout is easy to customize (font size, extra rows, symbols). Note that on current Fedora it can crash on the Wayland "surrounding text" event; kde-keybar is unaffected by that since it doesn't depend on the keyboard.
+
+Select one under System Settings, Keyboard, Virtual Keyboard. kde-keybar shows above whichever you pick.
 
 On wlroots compositors (sway, Hyprland) the two core pieces still work: ydotool injection and the layer-shell window. The auto-show hook is KDE-specific, though, because it listens on KWin's `org.kde.kwin.VirtualKeyboard` D-Bus interface. On those compositors set `visibility` to `"always"` (or run with `KEYBAR_ALWAYS=1`) and place the bar yourself.
 
