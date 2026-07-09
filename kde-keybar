@@ -155,26 +155,27 @@ def build_window(cfg, send):
         GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.BOTTOM, True)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.BOTTOM, bottom_margin_px(cfg))
 
-    flow = Gtk.FlowBox()          # wraps to more rows when the screen is narrow (portrait)
-    flow.set_selection_mode(Gtk.SelectionMode.NONE)
-    flow.set_homogeneous(True)
-    flow.set_max_children_per_line(max(1, len(cfg["buttons"])))
-    flow.set_min_children_per_line(1)
-    flow.set_row_spacing(4)
-    flow.set_column_spacing(4)
-    for m in ("top", "bottom", "start", "end"):
-        getattr(flow, f"set_margin_{m}")(4)
-
+    # One row in a horizontal scroller: the bar height is exactly one row (no dark
+    # void above the keys), and overflow on narrow/portrait screens scrolls sideways
+    # instead of clipping. (A FlowBox reports a stacked-column natural height here,
+    # which makes the layer surface far too tall.)
     bh = int(cfg.get("button_height_px", 54))
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+    box.set_homogeneous(False)
     for spec in cfg["buttons"]:
         codes = resolve_keys(spec.get("keys", []))
         b = Gtk.Button(label=spec.get("label", "?"))
         b.set_can_focus(False)
         b.set_size_request(-1, bh)
         b.connect("clicked", lambda _b, c=codes: send(c))
-        flow.add(b)
-    flow.set_valign(Gtk.Align.END)
-    win.add(flow)
+        box.add(b)
+    sw = Gtk.ScrolledWindow()
+    sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+    sw.set_propagate_natural_height(True)
+    for m in ("top", "bottom", "start", "end"):
+        getattr(sw, f"set_margin_{m}")(4)
+    sw.add(box)
+    win.add(sw)
 
     css = Gtk.CssProvider()
     css.load_from_data((f"""

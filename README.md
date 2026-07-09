@@ -25,7 +25,7 @@ You keep using your normal on-screen keyboard for typing, and kde-keybar gives y
 - Auto show/hide together with the OSK, driven by KWin's `VirtualKeyboard` D-Bus signal.
 - Layer-shell window anchored to the bottom (or top), lifted above the OSK by its height.
 - `keyboard-interactivity=none`: tapping the bar never steals focus from your text field.
-- Buttons wrap to more rows on narrow or portrait screens (GTK `FlowBox`).
+- The bar is a single row; on narrow or portrait screens the overflow scrolls sideways instead of clipping.
 - Fully configurable buttons: every button is a chord of evdev key names.
 - Small single-file Python script, no background service of its own beyond the standard autostart entry.
 
@@ -184,7 +184,7 @@ GDK_BACKEND=wayland KEYBAR_ALWAYS=1 kde-keybar
 
 **Buttons do nothing.** `ydotoold` is probably not running, or the socket path is wrong. Check `systemctl status ydotoold`, confirm `/run/ydotoold.socket` exists and is owned by your user, and make sure `ydotool_socket` / `YDOTOOL_SOCKET` points at it. Verify `ydotool` is on `PATH`.
 
-**Buttons are cut off on the right in portrait.** This is handled by the `FlowBox` wrap: buttons flow onto additional rows automatically. If it still looks tight, lower `font_px` or `button_height_px`.
+**Buttons are cut off on the right in portrait.** The bar keeps a single row and the overflow scrolls sideways, so nothing is clipped. If you want everything visible without scrolling, remove some buttons in the config or lower `font_px`.
 
 **Bar sits at the wrong height over the keyboard.** Tune `keyboard_height_fraction` for your OSK, nudge with `gap_px`, or set a hard `margin_px` (or `KEYBAR_MARGIN`) override.
 
