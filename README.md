@@ -207,6 +207,22 @@ To run it manually for a quick look:
 GDK_BACKEND=wayland KEYBAR_ALWAYS=1 kde-keybar
 ```
 
+### Commands
+
+| Command | What it does |
+| --- | --- |
+| `kde-keybar` | Run the bar (this is what autostart launches). |
+| `kde-keybar --list-themes` | Print the built-in theme names. |
+| `kde-keybar --validate` | Check the config for errors and exit non-zero if any. |
+| `kde-keybar --reload` | Tell running instances to reload their config now. |
+| `kde-keybar -c <path>` | Use a config file other than the default. |
+| `kde-keybar --version` | Print the version. |
+
+**Config changes apply live.** kde-keybar watches its config file and reloads on save, so
+editing `~/.config/kde-keybar.json` (theme, buttons, style, ...) updates the running bar with no
+restart. You can also force it with `kde-keybar --reload`. If a save is momentarily invalid, the
+bar keeps the last good config and logs a warning rather than crashing (run `--validate` to see why).
+
 ### Environment overrides
 
 | Variable | Effect |

@@ -16,6 +16,7 @@ A commented default is written on first run. Env overrides: KEYBAR_MARGIN, YDOTO
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 
@@ -166,13 +167,21 @@ def make_sender(cfg):
     return send
 
 
+def _int(v, default):
+    """int(v) but falls back to default on bad values (keeps a bad config non-fatal)."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def bottom_margin_px(cfg):
     env = os.environ.get("KEYBAR_MARGIN")
     if env and env.lstrip("-").isdigit():
         return int(env)
-    gap = int(cfg.get("gap_px", 0))
+    gap = _int(cfg.get("gap_px", 0), 0)
     if cfg.get("margin_px") is not None:
-        return int(cfg["margin_px"]) + gap
+        return _int(cfg["margin_px"], 0) + gap
     try:
         disp = Gdk.Display.get_default()
         mon = disp.get_primary_monitor() or disp.get_monitor(0)
@@ -204,8 +213,8 @@ def build_window(cfg, send):
     #   "wrap"             -> flow onto more rows
     # Both keep the bar exactly as tall as the row(s); a bare FlowBox would report a
     # stacked-column natural height and blow the layer surface up to full height.
-    bh = int(cfg.get("button_height_px", 54))
-    minw = int(cfg.get("button_min_width_px", 64))
+    bh = _int(cfg.get("button_height_px", 54), 54)
+    minw = _int(cfg.get("button_min_width_px", 64), 64)
     sp = 4
     try:
         mon = Gdk.Display.get_default().get_primary_monitor() or Gdk.Display.get_default().get_monitor(0)
@@ -247,33 +256,39 @@ def build_window(cfg, send):
         getattr(wrapper, f"set_margin_{m}")(sp)
     win.add(wrapper)
 
-    # theme provides the base palette; style {} overrides individual keys on top.
+    return win
+
+
+def apply_css(cfg, screen, state):
+    """(Re)apply the themed stylesheet. Builds the new provider first, so a bad
+    value leaves the previous style in place instead of clearing it."""
     st = {**THEMES.get(cfg.get("theme", "dark"), THEMES["dark"]), **cfg.get("style", {})}
 
     def sv(k, d):
         return st.get(k, d)
 
     ff = f"font-family: {sv('font_family', '')};" if sv("font_family", "") else ""
-    css = Gtk.CssProvider()
-    css.load_from_data((f"""
+    prov = Gtk.CssProvider()
+    prov.load_from_data((f"""
         window {{ background: {sv('background', 'rgba(20,20,24,0.92)')}; }}
-        button {{ font-size: {int(cfg.get('font_px', 20))}px; {ff}
-                  padding: {int(sv('button_padding_px', 6))}px;
+        button {{ font-size: {_int(cfg.get('font_px', 20), 20)}px; {ff}
+                  padding: {_int(sv('button_padding_px', 6), 6)}px;
                   color: {sv('button_fg', '#eeeeee')};
                   background: {sv('button_bg', '#33343a')};
-                  border: {int(sv('button_border_px', 1))}px solid {sv('button_border', '#4a4b52')};
-                  border-radius: {int(sv('button_radius_px', 8))}px; }}
+                  border: {_int(sv('button_border_px', 1), 1)}px solid {sv('button_border', '#4a4b52')};
+                  border-radius: {_int(sv('button_radius_px', 8), 8)}px; }}
         button:hover {{ background: {sv('button_hover_bg', '#44454c')}; }}
         button:active {{ background: {sv('button_active_bg', '#5a6cff')}; }}
     """).encode())
-    Gtk.StyleContext.add_provider_for_screen(
-        win.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
-    return win
+    if state.get("css"):
+        Gtk.StyleContext.remove_provider_for_screen(screen, state["css"])
+    Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    state["css"] = prov
 
 
-def watch_keyboard_visibility(win):
-    """Show/hide with KWin's OSK. KWin emits its own visibleChanged signal
-    (not the standard Properties.PropertiesChanged), so subscribe to that."""
+def setup_visibility(state):
+    """Subscribe once to KWin's OSK visibility and show/hide the current window.
+    KWin emits its own visibleChanged signal, not Properties.PropertiesChanged."""
     bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 
     def get_visible():
@@ -287,19 +302,101 @@ def watch_keyboard_visibility(win):
             return True
 
     def refresh(*_):
-        win.show_all() if get_visible() else win.hide()
+        win = state.get("win")
+        if not win:
+            return
+        if state.get("always") or get_visible():
+            win.show_all()
+        else:
+            win.hide()
 
     for member in ("visibleChanged", "enabledChanged", "activeChanged"):
         bus.signal_subscribe("org.kde.KWin", "org.kde.kwin.VirtualKeyboard", member,
                              "/VirtualKeyboard", None, Gio.DBusSignalFlags.NONE,
                              lambda *a: refresh())
-    refresh()
+    state["refresh_visibility"] = refresh
+
+
+STYLE_KEYS = {
+    "background", "button_bg", "button_fg", "button_border", "button_border_px",
+    "button_radius_px", "button_padding_px", "button_hover_bg", "button_active_bg", "font_family",
+}
+
+
+def validate_config(path):
+    """Return (errors, warnings): errors are problems, warnings are advisory."""
+    errs, warns = [], []
+    try:
+        with open(path) as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        warns.append(f"config not found: {path} (built-in defaults will be used)")
+        return errs, warns
+    except json.JSONDecodeError as e:
+        errs.append(f"invalid JSON: {e}")
+        return errs, warns
+
+    if cfg.get("theme", "dark") not in THEMES:
+        errs.append(f"unknown theme '{cfg.get('theme')}'; valid: {', '.join(THEMES)}")
+    if cfg.get("position", "bottom") not in ("bottom", "top"):
+        errs.append("position must be 'bottom' or 'top'")
+    if cfg.get("visibility", "keyboard") not in ("keyboard", "always"):
+        errs.append("visibility must be 'keyboard' or 'always'")
+    if cfg.get("overflow", "scroll") not in ("scroll", "wrap"):
+        errs.append("overflow must be 'scroll' or 'wrap'")
+    for k in ("font_px", "button_height_px", "button_min_width_px", "gap_px"):
+        if k in cfg and not isinstance(cfg[k], int):
+            errs.append(f"{k} must be an integer")
+    if cfg.get("margin_px") is not None and not isinstance(cfg.get("margin_px"), int):
+        errs.append("margin_px must be an integer or null")
+    for k in cfg.get("style", {}):
+        if k not in STYLE_KEYS:
+            warns.append(f"style: unknown key '{k}'")
+    btns = cfg.get("buttons")
+    if btns is None:
+        warns.append("no 'buttons' set; defaults will be used")
+    elif not isinstance(btns, list) or not btns:
+        errs.append("'buttons' must be a non-empty list")
+    else:
+        for i, b in enumerate(btns):
+            if not isinstance(b, dict) or "keys" not in b:
+                errs.append(f"button[{i}] must be an object with 'keys'")
+                continue
+            if "label" not in b:
+                warns.append(f"button[{i}] has no 'label'")
+            for kname in b.get("keys", []):
+                if KEYCODES.get(kname) is None and KEYCODES.get(str(kname).upper()) is None:
+                    errs.append(f"button[{i}] ({b.get('label', '?')}): unknown key '{kname}'")
+    return errs, warns
+
+
+def reload_running_instances():
+    """Send SIGHUP to other kde-keybar processes so they reload their config."""
+    me = os.getpid()
+    sent = 0
+    for pid in os.listdir("/proc"):
+        if not pid.isdigit() or int(pid) == me:
+            continue
+        try:
+            cmd = open(f"/proc/{pid}/cmdline", "rb").read()
+        except OSError:
+            continue
+        if b"kde-keybar" in cmd:
+            try:
+                os.kill(int(pid), signal.SIGHUP)
+                sent += 1
+            except OSError:
+                pass
+    return sent
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="kde-keybar", description=__doc__.strip().splitlines()[0])
     ap.add_argument("-c", "--config", default=DEFAULT_CONFIG_PATH, help="path to config JSON")
     ap.add_argument("--list-themes", action="store_true", help="list built-in themes and exit")
+    ap.add_argument("--validate", action="store_true", help="check the config for errors and exit")
+    ap.add_argument("--reload", action="store_true",
+                    help="tell running instances to reload their config, then exit")
     ap.add_argument("-V", "--version", action="version", version=f"kde-keybar {__version__}")
     args = ap.parse_args(argv)
 
@@ -309,13 +406,67 @@ def main(argv=None):
             print(f"  {name}")
         return
 
-    cfg = load_config(args.config)
-    win = build_window(cfg, make_sender(cfg))
-    if cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"):
-        win.show_all()
-    else:
-        watch_keyboard_visibility(win)
-    win.connect("destroy", Gtk.main_quit)
+    if args.validate:
+        errs, warns = validate_config(args.config)
+        for w in warns:
+            print(f"warning: {w}")
+        for e in errs:
+            print(f"error: {e}")
+        if errs:
+            print(f"{args.config}: {len(errs)} error(s), {len(warns)} warning(s)")
+            sys.exit(1)
+        print(f"{args.config}: OK" + (f" ({len(warns)} warning(s))" if warns else ""))
+        return
+
+    if args.reload:
+        print(f"sent reload to {reload_running_instances()} running instance(s)")
+        return
+
+    state = {}
+    setup_visibility(state)
+
+    def rebuild(*_):
+        win = None
+        try:
+            cfg = load_config(args.config)
+            win = build_window(cfg, make_sender(cfg))
+            apply_css(cfg, win.get_screen(), state)
+        except Exception as e:
+            print(f"kde-keybar: reload failed, keeping current config ({e})", file=sys.stderr)
+            if win is not None:
+                win.destroy()
+            return False
+        old = state.get("win")
+        state["win"] = win
+        state["always"] = bool(cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"))
+        state["refresh_visibility"]()
+        if old:
+            old.destroy()
+        return False
+
+    rebuild()
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, lambda *a: rebuild() or True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *a: Gtk.main_quit() or True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *a: Gtk.main_quit() or True)
+
+    # auto-reload when the config file changes (watch the dir to catch editor rename-saves)
+    try:
+        cfgfile = Gio.File.new_for_path(args.config)
+        mon = cfgfile.get_parent().monitor_directory(Gio.FileMonitorFlags.NONE, None)
+
+        def on_change(_m, changed, _o, _e):
+            if changed and changed.get_basename() == cfgfile.get_basename():
+                if state.get("reload_timer"):
+                    GLib.source_remove(state["reload_timer"])
+                state["reload_timer"] = GLib.timeout_add(
+                    300, lambda: (state.pop("reload_timer", None), rebuild())[1])
+
+        mon.connect("changed", on_change)
+        state["monitor"] = mon
+    except GLib.Error:
+        pass
+
     Gtk.main()
 
 
