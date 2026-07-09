@@ -58,10 +58,24 @@ DEFAULT_CONFIG = {
     "visibility": "keyboard",         # "keyboard" (auto-hide with OSK) or "always"
     "font_px": 20,
     "button_height_px": 54,           # thickness of the strip
+    "button_min_width_px": 64,        # min key width; below this the row scrolls/wraps
+    "overflow": "scroll",             # "scroll" (sideways) or "wrap" (new row)
     "gap_px": 0,                      # extra px between bar and keyboard (+ up / - down)
     "margin_px": None,                # hard override of the bottom margin; null = auto
     "keyboard_height_fraction": {"landscape": 0.30, "portrait": 0.24},
     "ydotool_socket": "/run/ydotoold.socket",
+    "style": {                        # all optional; these are the defaults
+        "background": "rgba(20,20,24,0.92)",
+        "button_bg": "#33343a",
+        "button_fg": "#eeeeee",
+        "button_border": "#4a4b52",
+        "button_border_px": 1,
+        "button_radius_px": 8,
+        "button_padding_px": 6,
+        "button_hover_bg": "#44454c",
+        "button_active_bg": "#5a6cff",
+        "font_family": None
+    },
     "buttons": [
         {"label": "Esc",     "keys": ["ESC"]},
         {"label": "Tab",     "keys": ["TAB"]},
@@ -155,35 +169,71 @@ def build_window(cfg, send):
         GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.BOTTOM, True)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.BOTTOM, bottom_margin_px(cfg))
 
-    # One row in a horizontal scroller: the bar height is exactly one row (no dark
-    # void above the keys), and overflow on narrow/portrait screens scrolls sideways
-    # instead of clipping. (A FlowBox reports a stacked-column natural height here,
-    # which makes the layer surface far too tall.)
+    # Buttons fill the width; `overflow` decides what happens when they do not fit:
+    #   "scroll" (default) -> single row, extra scrolls sideways
+    #   "wrap"             -> flow onto more rows
+    # Both keep the bar exactly as tall as the row(s); a bare FlowBox would report a
+    # stacked-column natural height and blow the layer surface up to full height.
     bh = int(cfg.get("button_height_px", 54))
-    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-    box.set_homogeneous(False)
-    for spec in cfg["buttons"]:
+    minw = int(cfg.get("button_min_width_px", 64))
+    sp = 4
+    try:
+        mon = Gdk.Display.get_default().get_primary_monitor() or Gdk.Display.get_default().get_monitor(0)
+        screen_w = mon.get_geometry().width
+    except Exception:
+        screen_w = 1280
+
+    def make_button(spec):
         codes = resolve_keys(spec.get("keys", []))
         b = Gtk.Button(label=spec.get("label", "?"))
         b.set_can_focus(False)
-        b.set_size_request(-1, bh)
+        b.set_size_request(minw, bh)
         b.connect("clicked", lambda _b, c=codes: send(c))
-        box.add(b)
-    sw = Gtk.ScrolledWindow()
-    sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-    sw.set_propagate_natural_height(True)
-    for m in ("top", "bottom", "start", "end"):
-        getattr(sw, f"set_margin_{m}")(4)
-    sw.add(box)
-    win.add(sw)
+        return b
 
+    if cfg.get("overflow") == "wrap":
+        wrapper = Gtk.FlowBox()
+        wrapper.set_selection_mode(Gtk.SelectionMode.NONE)
+        wrapper.set_homogeneous(True)
+        wrapper.set_max_children_per_line(max(1, len(cfg["buttons"])))
+        wrapper.set_min_children_per_line(1)
+        wrapper.set_row_spacing(sp)
+        wrapper.set_column_spacing(sp)
+        wrapper.set_size_request(screen_w - 2 * sp, -1)   # real width -> correct row count/height
+        for spec in cfg["buttons"]:
+            wrapper.add(make_button(spec))
+    else:
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=sp)
+        box.set_homogeneous(True)
+        box.set_size_request(screen_w - 2 * sp, -1)       # fill width; grows -> scrolls
+        for spec in cfg["buttons"]:
+            box.add(make_button(spec))
+        wrapper = Gtk.ScrolledWindow()
+        wrapper.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        wrapper.set_propagate_natural_height(True)
+        wrapper.add(box)
+
+    for m in ("top", "bottom", "start", "end"):
+        getattr(wrapper, f"set_margin_{m}")(sp)
+    win.add(wrapper)
+
+    st = cfg.get("style", {})
+
+    def sv(k, d):
+        return st.get(k, d)
+
+    ff = f"font-family: {sv('font_family', '')};" if sv("font_family", "") else ""
     css = Gtk.CssProvider()
     css.load_from_data((f"""
-        window {{ background: rgba(20,20,24,0.92); }}
-        button {{ font-size: {int(cfg.get('font_px', 20))}px; padding: 4px 6px; color: #eee;
-                  background: #33343a; border: 1px solid #4a4b52; border-radius: 8px; }}
-        button:hover {{ background: #44454c; }}
-        button:active {{ background: #5a6cff; }}
+        window {{ background: {sv('background', 'rgba(20,20,24,0.92)')}; }}
+        button {{ font-size: {int(cfg.get('font_px', 20))}px; {ff}
+                  padding: {int(sv('button_padding_px', 6))}px;
+                  color: {sv('button_fg', '#eeeeee')};
+                  background: {sv('button_bg', '#33343a')};
+                  border: {int(sv('button_border_px', 1))}px solid {sv('button_border', '#4a4b52')};
+                  border-radius: {int(sv('button_radius_px', 8))}px; }}
+        button:hover {{ background: {sv('button_hover_bg', '#44454c')}; }}
+        button:active {{ background: {sv('button_active_bg', '#5a6cff')}; }}
     """).encode())
     Gtk.StyleContext.add_provider_for_screen(
         win.get_screen(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)

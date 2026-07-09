@@ -121,11 +121,31 @@ Config lives at `~/.config/kde-keybar.json` (respects `XDG_CONFIG_HOME`). It is 
 | `visibility` | string | `"keyboard"` | `"keyboard"` auto-shows/hides with the OSK via D-Bus; `"always"` keeps the bar on screen. |
 | `font_px` | int | `20` | Button label font size in pixels. |
 | `button_height_px` | int | `54` | Thickness of the strip (button height). |
+| `button_min_width_px` | int | `64` | Minimum key width. When keys would be narrower than this, the row scrolls or wraps instead of shrinking further. |
+| `overflow` | string | `"scroll"` | What happens when the keys do not fit one row: `"scroll"` (scroll sideways) or `"wrap"` (flow onto more rows). Keys always fill the width. |
 | `gap_px` | int | `0` | Extra pixels between the bar and the keyboard. Positive nudges up, negative nudges down. |
 | `margin_px` | int or null | `null` | Hard override of the bottom margin in pixels. `null` means auto-compute from the OSK height. Added on top of `gap_px`. |
 | `keyboard_height_fraction` | object | `{ "landscape": 0.30, "portrait": 0.24 }` | Fraction of the screen height the OSK is assumed to cover, used to auto-place the bar above it. Selected by orientation. |
 | `ydotool_socket` | string | `"/run/ydotoold.socket"` | Path to the `ydotoold` socket. Overridden by the `YDOTOOL_SOCKET` env var. |
+| `style` | object | see below | Colors/theming (optional; each key falls back to the default). |
 | `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`. |
+
+### `style` keys
+
+All optional. Values are CSS color/length strings unless noted.
+
+| Key | Default | Notes |
+|---|---|---|
+| `background` | `"rgba(20,20,24,0.92)"` | Bar background. Use an `rgba(...)` with alpha < 1 for transparency. |
+| `button_bg` | `"#33343a"` | Key background. |
+| `button_fg` | `"#eeeeee"` | Key label color. |
+| `button_border` | `"#4a4b52"` | Key border color. |
+| `button_border_px` | `1` | Key border width (int). |
+| `button_radius_px` | `8` | Key corner radius (int). |
+| `button_padding_px` | `6` | Key inner padding (int). |
+| `button_hover_bg` | `"#44454c"` | Key background on hover. |
+| `button_active_bg` | `"#5a6cff"` | Key background while pressed. |
+| `font_family` | `null` | Font family for labels; `null` uses the default. |
 
 ### Buttons and key chords
 
