@@ -9,18 +9,8 @@
   "margin_px": null,
   "keyboard_height_fraction": { "landscape": 0.30, "portrait": 0.24 },
   "ydotool_socket": "/run/ydotoold.socket",
-  "style": {
-    "background": "rgba(20,20,24,0.92)",
-    "button_bg": "#33343a",
-    "button_fg": "#eeeeee",
-    "button_border": "#4a4b52",
-    "button_border_px": 1,
-    "button_radius_px": 8,
-    "button_padding_px": 6,
-    "button_hover_bg": "#44454c",
-    "button_active_bg": "#5a6cff",
-    "font_family": null
-  },
+  "theme": "dark",
+  "style": {},
   "buttons": [
     { "label": "Esc",     "keys": ["ESC"] },
     { "label": "Tab",     "keys": ["TAB"] },

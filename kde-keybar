@@ -53,6 +53,46 @@ DEFAULT_CONFIG_PATH = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
     "kde-keybar.json")
 
+# Built-in themes. Pick one with "theme": "<name>"; override any key via "style": {...}.
+THEMES = {
+    "dark": {
+        "background": "rgba(20,20,24,0.92)", "button_bg": "#33343a", "button_fg": "#eeeeee",
+        "button_border": "#4a4b52", "button_border_px": 1, "button_radius_px": 8,
+        "button_padding_px": 6, "button_hover_bg": "#44454c", "button_active_bg": "#5a6cff",
+        "font_family": None,
+    },
+    "light": {
+        "background": "rgba(245,245,247,0.96)", "button_bg": "#ffffff", "button_fg": "#1f2023",
+        "button_border": "#c9cace", "button_border_px": 1, "button_radius_px": 8,
+        "button_padding_px": 6, "button_hover_bg": "#ececee", "button_active_bg": "#3b82f6",
+        "font_family": None,
+    },
+    "nord": {
+        "background": "rgba(46,52,64,0.94)", "button_bg": "#3b4252", "button_fg": "#eceff4",
+        "button_border": "#4c566a", "button_border_px": 1, "button_radius_px": 8,
+        "button_padding_px": 6, "button_hover_bg": "#434c5e", "button_active_bg": "#88c0d0",
+        "font_family": None,
+    },
+    "solarized": {
+        "background": "rgba(0,43,54,0.94)", "button_bg": "#073642", "button_fg": "#93a1a1",
+        "button_border": "#586e75", "button_border_px": 1, "button_radius_px": 8,
+        "button_padding_px": 6, "button_hover_bg": "#094e5a", "button_active_bg": "#268bd2",
+        "font_family": None,
+    },
+    "transparent": {
+        "background": "rgba(0,0,0,0.25)", "button_bg": "rgba(255,255,255,0.12)",
+        "button_fg": "#ffffff", "button_border": "rgba(255,255,255,0.25)", "button_border_px": 1,
+        "button_radius_px": 10, "button_padding_px": 6, "button_hover_bg": "rgba(255,255,255,0.22)",
+        "button_active_bg": "rgba(90,108,255,0.85)", "font_family": None,
+    },
+    "matrix": {
+        "background": "rgba(0,0,0,0.85)", "button_bg": "#001a00", "button_fg": "#33ff66",
+        "button_border": "#0a5a2a", "button_border_px": 1, "button_radius_px": 4,
+        "button_padding_px": 6, "button_hover_bg": "#003300", "button_active_bg": "#00ff41",
+        "font_family": "monospace",
+    },
+}
+
 DEFAULT_CONFIG = {
     "position": "bottom",             # "bottom" (above OSK) or "top"
     "visibility": "keyboard",         # "keyboard" (auto-hide with OSK) or "always"
@@ -64,18 +104,8 @@ DEFAULT_CONFIG = {
     "margin_px": None,                # hard override of the bottom margin; null = auto
     "keyboard_height_fraction": {"landscape": 0.30, "portrait": 0.24},
     "ydotool_socket": "/run/ydotoold.socket",
-    "style": {                        # all optional; these are the defaults
-        "background": "rgba(20,20,24,0.92)",
-        "button_bg": "#33343a",
-        "button_fg": "#eeeeee",
-        "button_border": "#4a4b52",
-        "button_border_px": 1,
-        "button_radius_px": 8,
-        "button_padding_px": 6,
-        "button_hover_bg": "#44454c",
-        "button_active_bg": "#5a6cff",
-        "font_family": None
-    },
+    "theme": "dark",                  # dark | light | nord | solarized | transparent | matrix
+    "style": {},                      # override individual theme keys here (see README)
     "buttons": [
         {"label": "Esc",     "keys": ["ESC"]},
         {"label": "Tab",     "keys": ["TAB"]},
@@ -217,7 +247,8 @@ def build_window(cfg, send):
         getattr(wrapper, f"set_margin_{m}")(sp)
     win.add(wrapper)
 
-    st = cfg.get("style", {})
+    # theme provides the base palette; style {} overrides individual keys on top.
+    st = {**THEMES.get(cfg.get("theme", "dark"), THEMES["dark"]), **cfg.get("style", {})}
 
     def sv(k, d):
         return st.get(k, d)

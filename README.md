@@ -127,12 +127,30 @@ Config lives at `~/.config/kde-keybar.json` (respects `XDG_CONFIG_HOME`). It is 
 | `margin_px` | int or null | `null` | Hard override of the bottom margin in pixels. `null` means auto-compute from the OSK height. Added on top of `gap_px`. |
 | `keyboard_height_fraction` | object | `{ "landscape": 0.30, "portrait": 0.24 }` | Fraction of the screen height the OSK is assumed to cover, used to auto-place the bar above it. Selected by orientation. |
 | `ydotool_socket` | string | `"/run/ydotoold.socket"` | Path to the `ydotoold` socket. Overridden by the `YDOTOOL_SOCKET` env var. |
-| `style` | object | see below | Colors/theming (optional; each key falls back to the default). |
+| `theme` | string | `"dark"` | Built-in palette: `dark`, `light`, `nord`, `solarized`, `transparent`, `matrix`. |
+| `style` | object | `{}` | Overrides individual theme keys (see below). Set a few keys to tweak a theme, or all of them to bring your own. |
 | `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`. |
+
+### Theming
+
+Pick a built-in `theme`, tweak a theme with a few `style` overrides, or bring your own by
+setting all the `style` keys:
+
+```json
+{ "theme": "nord" }
+```
+```json
+{ "theme": "dark", "style": { "button_radius_px": 14, "button_active_bg": "#00b894" } }
+```
+```json
+{ "style": { "background": "rgba(0,0,0,0.4)", "button_bg": "#222", "button_fg": "#fff" } }
+```
+
+Built-in themes: `dark` (default), `light`, `nord`, `solarized`, `transparent`, `matrix`.
 
 ### `style` keys
 
-All optional. Values are CSS color/length strings unless noted.
+All optional; each overrides the chosen theme. Values are CSS color/length strings unless noted.
 
 | Key | Default | Notes |
 |---|---|---|
