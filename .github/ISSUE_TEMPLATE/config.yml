@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Troubleshooting
+    url: https://github.com/thereisnotime/kde-keybar#troubleshooting
+    about: Check the README troubleshooting section first, it covers the common cases.

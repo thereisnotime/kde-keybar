@@ -269,6 +269,11 @@ Select one under System Settings, Keyboard, Virtual Keyboard. kde-keybar shows a
 
 On wlroots compositors (sway, Hyprland) the two core pieces still work: ydotool injection and the layer-shell window. The auto-show hook is KDE-specific, though, because it listens on KWin's `org.kde.kwin.VirtualKeyboard` D-Bus interface. On those compositors set `visibility` to `"always"` (or run with `KEYBAR_ALWAYS=1`) and place the bar yourself.
 
+## Roadmap
+
+- GNOME (Mutter) and X11 support via a non-layer-shell fallback window (regular always-on-top window instead of `wlr-layer-shell`). Tracked in the [issues](https://github.com/thereisnotime/kde-keybar/issues).
+- A Plasma panel widget variant for people who want a few keys docked in the taskbar rather than floating.
+
 ## Development
 
 Recipes are managed with [`just`](https://github.com/casey/just):
