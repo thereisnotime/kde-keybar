@@ -1,6 +1,16 @@
 # kde-keybar
 
-An on-screen strip of tappable keys (Esc, Tab, Alt+Tab, Ctrl+C, arrows, Enter, â€¦) that appears together with the on-screen keyboard on KDE Plasma Wayland and injects **real** key chords into the focused app.
+<p align="center"><em>Terminal control keys on-screen for KDE Plasma Wayland.</em></p>
+
+<p align="center">
+  <a href="https://github.com/thereisnotime/kde-keybar/actions/workflows/ci.yml"><img src="https://github.com/thereisnotime/kde-keybar/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/thereisnotime/kde-keybar/releases"><img src="https://img.shields.io/github/v/release/thereisnotime/kde-keybar?sort=semver&color=blue" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/KDE%20Plasma%206-Wayland-1d99f3?logo=kde&logoColor=white" alt="KDE Plasma 6 Wayland">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776ab?logo=python&logoColor=white" alt="Python 3.11+">
+</p>
+
+A small on-screen row of tappable keys for KDE Plasma Wayland. It rides along with your on-screen keyboard and sends the control chords the built-in ones can't: `Ctrl+C`, `Esc`, `Alt+Tab`, arrows, a tmux/zellij prefix, whatever you put in the config. The keys go to the focused window as real key events, so vim, tmux, zellij, and the like actually work from a touchscreen.
 
 ![kde-keybar](docs/demo.png)
 
@@ -10,9 +20,9 @@ An on-screen strip of tappable keys (Esc, Tab, Alt+Tab, Ctrl+C, arrows, Enter, â
 
 On KDE Plasma Wayland, KWin refuses the Wayland virtual-keyboard and input-method protocols to external clients as an anti-keylogger measure. Because of that, external on-screen keyboards like `wvkbd` and `onboard` cannot run at all.
 
-The keyboards that do work (Plasma Keyboard, Qt Virtual Keyboard, Maliit) only **commit text**. They physically cannot send `Ctrl+C`, `Esc`, or Alt-chords to a terminal, so tools like vim, tmux, zellij, and Claude Code are unusable from a touchscreen.
+The keyboards that do work (Plasma Keyboard, Qt Virtual Keyboard, Maliit) only **commit text**. They can't send `Ctrl+C`, `Esc`, or Alt-chords to a terminal, so vim, tmux, zellij, and the like are unusable from a touchscreen.
 
-kde-keybar sidesteps the whole problem:
+kde-keybar works around this two ways:
 
 - Keys are injected through **ydotool**, which talks to the kernel `uinput` device. KWin cannot block that path, so real chords reach the focused window.
 - The bar shows and hides by watching KWin's generic `org.kde.kwin.VirtualKeyboard.visible` D-Bus signal, so it rides along with **any** of the built-in OSKs instead of replacing them.
