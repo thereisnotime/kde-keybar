@@ -1,0 +1,13 @@
+{
+  "visibility": "always",
+  "position": "top",
+  "dock": true,
+  "theme": "nord",
+  "buttons": [
+    { "label": "Esc", "keys": ["ESC"] },
+    { "label": "^C", "keys": ["LCTRL", "C"] },
+    { "label": "^V", "keys": ["LCTRL", "V"] },
+    { "label": "Alt+Tab", "keys": ["LALT", "TAB"] },
+    { "label": "Super", "keys": ["LSUPER"] }
+  ]
+}

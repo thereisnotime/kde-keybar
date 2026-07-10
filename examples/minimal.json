@@ -1,0 +1,9 @@
+{
+  "buttons": [
+    { "label": "Esc", "keys": ["ESC"] },
+    { "label": "Tab", "keys": ["TAB"] },
+    { "label": "^C", "keys": ["LCTRL", "C"] },
+    { "label": "←", "keys": ["LEFT"] },
+    { "label": "→", "keys": ["RIGHT"] }
+  ]
+}

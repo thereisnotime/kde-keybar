@@ -1,0 +1,8 @@
+{
+  "theme": "transparent",
+  "style": {
+    "background": "rgba(0,0,0,0.35)",
+    "button_radius_px": 12,
+    "button_active_bg": "rgba(90,108,255,0.9)"
+  }
+}

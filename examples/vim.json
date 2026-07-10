@@ -1,0 +1,12 @@
+{
+  "theme": "gruvbox",
+  "buttons": [
+    { "label": "Esc", "keys": ["ESC"] },
+    { "label": ":", "keys": ["LSHIFT", "SEMICOLON"] },
+    { "label": "/", "keys": ["SLASH"] },
+    { "label": "^]", "keys": ["LCTRL", "RIGHTBRACE"] },
+    { "label": "^O", "keys": ["LCTRL", "O"] },
+    { "label": "↑", "keys": ["UP"] },
+    { "label": "↓", "keys": ["DOWN"] }
+  ]
+}
