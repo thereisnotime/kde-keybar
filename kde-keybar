@@ -313,6 +313,9 @@ THEMES = {
 DEFAULT_CONFIG = {
     "position": "bottom",  # "bottom" (above OSK) or "top"
     "visibility": "keyboard",  # "keyboard" (auto-hide with OSK) or "always"
+    "layer": "overlay",  # overlay | top | bottom | background (stacking layer)
+    "dock": False,  # reserve space so windows do not go under the bar (panel mode)
+    "monitor": None,  # output index to show on; null = compositor default
     "font_px": 20,
     "button_height_px": 54,  # thickness of the strip
     "button_min_width_px": 64,  # min key width; below this the row scrolls/wraps
@@ -407,6 +410,9 @@ def bottom_margin_px(cfg):
     gap = _int(cfg.get("gap_px", 0), 0)
     if cfg.get("margin_px") is not None:
         return _int(cfg["margin_px"], 0) + gap
+    # In always mode there is no on-screen keyboard to sit above, so hug the edge.
+    if cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"):
+        return gap
     try:
         g = _monitor_geometry()
         if g is None:
@@ -422,9 +428,25 @@ def bottom_margin_px(cfg):
 def build_window(cfg, send):
     win = Gtk.Window()
     GtkLayerShell.init_for_window(win)
-    GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+    layers = {
+        "background": GtkLayerShell.Layer.BACKGROUND,
+        "bottom": GtkLayerShell.Layer.BOTTOM,
+        "top": GtkLayerShell.Layer.TOP,
+        "overlay": GtkLayerShell.Layer.OVERLAY,
+    }
+    GtkLayerShell.set_layer(
+        win, layers.get(cfg.get("layer", "overlay"), GtkLayerShell.Layer.OVERLAY)
+    )
     GtkLayerShell.set_keyboard_mode(win, GtkLayerShell.KeyboardMode.NONE)  # never steal focus
     GtkLayerShell.set_namespace(win, "kde-keybar")
+
+    if cfg.get("monitor") is not None:
+        disp = Gdk.Display.get_default()
+        monitors = disp.get_monitors() if disp else None
+        idx = _int(cfg.get("monitor"), 0)
+        if monitors and 0 <= idx < monitors.get_n_items():
+            GtkLayerShell.set_monitor(win, monitors.get_item(idx))
+
     GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.LEFT, True)
     GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.RIGHT, True)
     if cfg.get("position") == "top":
@@ -432,6 +454,10 @@ def build_window(cfg, send):
     else:
         GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.BOTTOM, True)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.BOTTOM, bottom_margin_px(cfg))
+
+    if cfg.get("dock"):
+        # Reserve space so windows do not slide under the bar (panel/dock behavior).
+        GtkLayerShell.auto_exclusive_zone_enable(win)
 
     # Buttons fill the width; `overflow` decides what happens when they do not fit:
     #   "scroll" (default) -> single row, extra scrolls sideways
@@ -588,6 +614,12 @@ def validate_config(path):
         errs.append("visibility must be 'keyboard' or 'always'")
     if cfg.get("overflow", "scroll") not in ("scroll", "wrap"):
         errs.append("overflow must be 'scroll' or 'wrap'")
+    if cfg.get("layer", "overlay") not in ("overlay", "top", "bottom", "background"):
+        errs.append("layer must be 'overlay', 'top', 'bottom', or 'background'")
+    if "dock" in cfg and not isinstance(cfg["dock"], bool):
+        errs.append("dock must be true or false")
+    if cfg.get("monitor") is not None and not isinstance(cfg.get("monitor"), int):
+        errs.append("monitor must be an integer or null")
     for k in ("font_px", "button_height_px", "button_min_width_px", "gap_px"):
         if k in cfg and not isinstance(cfg[k], int):
             errs.append(f"{k} must be an integer")

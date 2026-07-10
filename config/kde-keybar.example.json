@@ -1,6 +1,9 @@
 {
   "position": "bottom",
   "visibility": "keyboard",
+  "layer": "overlay",
+  "dock": false,
+  "monitor": null,
   "font_px": 20,
   "button_height_px": 54,
   "button_min_width_px": 64,

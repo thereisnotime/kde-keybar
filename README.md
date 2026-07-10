@@ -128,7 +128,10 @@ Config lives at `~/.config/kde-keybar.json` (respects `XDG_CONFIG_HOME`). It is 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `position` | string | `"bottom"` | `"bottom"` places the bar above the OSK; `"top"` anchors it to the top edge. |
-| `visibility` | string | `"keyboard"` | `"keyboard"` auto-shows/hides with the OSK via D-Bus; `"always"` keeps the bar on screen. |
+| `visibility` | string | `"keyboard"` | `"keyboard"` auto-shows/hides with the OSK via D-Bus; `"always"` keeps the bar on screen (and hugs the edge, no OSK margin). |
+| `layer` | string | `"overlay"` | Stacking layer: `overlay` (above everything), `top`, `bottom`, or `background`. |
+| `dock` | bool | `false` | Reserve space so windows do not slide under the bar (panel/dock behavior). Best with `visibility: "always"`. |
+| `monitor` | int or null | `null` | Output index to place the bar on. `null` uses the compositor default. |
 | `font_px` | int | `20` | Button label font size in pixels. |
 | `button_height_px` | int | `54` | Thickness of the strip (button height). |
 | `button_min_width_px` | int | `64` | Minimum key width. When keys would be narrower than this, the row scrolls or wraps instead of shrinking further. |
@@ -234,6 +237,16 @@ GDK_BACKEND=wayland KEYBAR_ALWAYS=1 kde-keybar
 editing `~/.config/kde-keybar.json` (theme, buttons, style, ...) updates the running bar with no
 restart. You can also force it with `kde-keybar --reload`. If a save is momentarily invalid, the
 bar keeps the last good config and logs a warning rather than crashing (run `--validate` to see why).
+
+### Always-on dock
+
+To keep the bar on screen at all times as a panel that windows do not cover (instead of tracking the keyboard), for example a permanent shortcut strip at the top:
+
+```json
+{ "visibility": "always", "position": "top", "dock": true }
+```
+
+`dock: true` reserves the bar's height so maximized windows sit next to it, not under it.
 
 ### Environment overrides
 
