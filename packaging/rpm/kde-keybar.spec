@@ -11,8 +11,8 @@ BuildArch:      noarch
 
 Requires:       python3
 Requires:       python3-gobject
-Requires:       gtk3
-Requires:       gtk-layer-shell
+Requires:       gtk4
+Requires:       gtk4-layer-shell
 Requires:       ydotool
 
 %description

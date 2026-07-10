@@ -23,10 +23,19 @@ import sys
 
 import gi
 
-gi.require_version("Gtk", "3.0")
-gi.require_version("Gdk", "3.0")
-gi.require_version("GtkLayerShell", "0.1")
-from gi.repository import Gdk, Gio, GLib, Gtk, GtkLayerShell  # noqa: E402
+# gtk4-layer-shell must be loaded before libwayland-client, which GTK pulls in the
+# moment it is imported. Through PyGObject the reliable fix is LD_PRELOAD, so re-exec
+# ourselves once with it set. https://github.com/wmww/gtk4-layer-shell/blob/main/linking.md
+_LS_LIB = "libgtk4-layer-shell.so.0"
+if _LS_LIB not in os.environ.get("LD_PRELOAD", ""):
+    os.environ["LD_PRELOAD"] = (_LS_LIB + " " + os.environ.get("LD_PRELOAD", "")).strip()
+    os.execv(sys.executable, [sys.executable, *sys.argv])
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("Gdk", "4.0")
+gi.require_version("Gtk4LayerShell", "1.0")
+from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
+from gi.repository import Gtk4LayerShell as GtkLayerShell  # noqa: E402
 
 __version__ = "0.1.0"
 
@@ -382,6 +391,15 @@ def _int(v, default):
         return default
 
 
+def _monitor_geometry():
+    """Geometry of the first monitor (GTK4 Gdk API), or None."""
+    disp = Gdk.Display.get_default()
+    monitors = disp.get_monitors() if disp else None
+    if not monitors or monitors.get_n_items() == 0:
+        return None
+    return monitors.get_item(0).get_geometry()
+
+
 def bottom_margin_px(cfg):
     env = os.environ.get("KEYBAR_MARGIN")
     if env and env.lstrip("-").isdigit():
@@ -390,9 +408,9 @@ def bottom_margin_px(cfg):
     if cfg.get("margin_px") is not None:
         return _int(cfg["margin_px"], 0) + gap
     try:
-        disp = Gdk.Display.get_default()
-        mon = disp.get_primary_monitor() or disp.get_monitor(0)
-        g = mon.get_geometry()
+        g = _monitor_geometry()
+        if g is None:
+            return 320 + gap
         portrait = g.height > g.width
         fr = cfg["keyboard_height_fraction"]
         frac = fr["portrait"] if portrait else fr["landscape"]
@@ -423,19 +441,13 @@ def build_window(cfg, send):
     bh = _int(cfg.get("button_height_px", 54), 54)
     minw = _int(cfg.get("button_min_width_px", 64), 64)
     sp = 4
-    try:
-        mon = (
-            Gdk.Display.get_default().get_primary_monitor()
-            or Gdk.Display.get_default().get_monitor(0)
-        )
-        screen_w = mon.get_geometry().width
-    except Exception:
-        screen_w = 1280
+    g = _monitor_geometry()
+    screen_w = g.width if g is not None else 1280
 
     def make_button(spec):
         codes = resolve_keys(spec.get("keys", []))
         b = Gtk.Button(label=spec.get("label", "?"))
-        b.set_can_focus(False)
+        b.set_focusable(False)
         b.set_size_request(minw, bh)
         b.connect("clicked", lambda _b, c=codes: send(c))
         return b
@@ -450,26 +462,26 @@ def build_window(cfg, send):
         wrapper.set_column_spacing(sp)
         wrapper.set_size_request(screen_w - 2 * sp, -1)  # real width -> correct row count/height
         for spec in cfg["buttons"]:
-            wrapper.add(make_button(spec))
+            wrapper.append(make_button(spec))
     else:
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=sp)
         box.set_homogeneous(True)
         box.set_size_request(screen_w - 2 * sp, -1)  # fill width; grows -> scrolls
         for spec in cfg["buttons"]:
-            box.add(make_button(spec))
+            box.append(make_button(spec))
         wrapper = Gtk.ScrolledWindow()
         wrapper.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
         wrapper.set_propagate_natural_height(True)
-        wrapper.add(box)
+        wrapper.set_child(box)
 
     for m in ("top", "bottom", "start", "end"):
         getattr(wrapper, f"set_margin_{m}")(sp)
-    win.add(wrapper)
+    win.set_child(wrapper)
 
     return win
 
 
-def apply_css(cfg, screen, state):
+def apply_css(cfg, display, state):
     """(Re)apply the themed stylesheet. Builds the new provider first, so a bad
     value leaves the previous style in place instead of clearing it."""
     st = {**THEMES.get(cfg.get("theme", "dark"), THEMES["dark"]), **cfg.get("style", {})}
@@ -479,9 +491,8 @@ def apply_css(cfg, screen, state):
 
     ff = f"font-family: {sv('font_family', '')};" if sv("font_family", "") else ""
     prov = Gtk.CssProvider()
-    prov.load_from_data(
-        (
-            f"""
+    prov.load_from_string(
+        f"""
         window {{ background: {sv("background", "rgba(20,20,24,0.92)")}; }}
         button {{ font-size: {_int(cfg.get("font_px", 20), 20)}px; {ff}
                   padding: {_int(sv("button_padding_px", 6), 6)}px;
@@ -492,11 +503,12 @@ def apply_css(cfg, screen, state):
         button:hover {{ background: {sv("button_hover_bg", "#44454c")}; }}
         button:active {{ background: {sv("button_active_bg", "#5a6cff")}; }}
     """
-        ).encode()
     )
     if state.get("css"):
-        Gtk.StyleContext.remove_provider_for_screen(screen, state["css"])
-    Gtk.StyleContext.add_provider_for_screen(screen, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.StyleContext.remove_provider_for_display(display, state["css"])
+    Gtk.StyleContext.add_provider_for_display(
+        display, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+    )
     state["css"] = prov
 
 
@@ -526,10 +538,7 @@ def setup_visibility(state):
         win = state.get("win")
         if not win:
             return
-        if state.get("always") or get_visible():
-            win.show_all()
-        else:
-            win.hide()
+        win.set_visible(bool(state.get("always") or get_visible()))
 
     for member in ("visibleChanged", "enabledChanged", "activeChanged"):
         bus.signal_subscribe(
@@ -660,6 +669,8 @@ def main(argv=None):
         print(f"sent reload to {reload_running_instances()} running instance(s)")
         return
 
+    Gtk.init()
+    loop = GLib.MainLoop()
     state = {}
     setup_visibility(state)
 
@@ -668,7 +679,7 @@ def main(argv=None):
         try:
             cfg = load_config(args.config)
             win = build_window(cfg, make_sender(cfg))
-            apply_css(cfg, win.get_screen(), state)
+            apply_css(cfg, win.get_display(), state)
         except Exception as e:
             print(f"kde-keybar: reload failed, keeping current config ({e})", file=sys.stderr)
             if win is not None:
@@ -685,8 +696,8 @@ def main(argv=None):
     rebuild()
 
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, lambda *a: rebuild() or True)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *a: Gtk.main_quit() or True)
-    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *a: Gtk.main_quit() or True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *a: loop.quit() or True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *a: loop.quit() or True)
 
     # auto-reload when the config file changes (watch the dir to catch editor rename-saves)
     try:
@@ -706,7 +717,7 @@ def main(argv=None):
     except GLib.Error:
         pass
 
-    Gtk.main()
+    loop.run()
 
 
 if __name__ == "__main__":

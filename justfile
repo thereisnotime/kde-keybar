@@ -39,6 +39,7 @@ default:
     printf '\n'
 
     printf '%s%s Install/System %s\n' "$b" "$cyan" "$r"
+    row doctor         "Check that all runtime dependencies are present"
     row install        "Install to system paths (sudo)"
     row uninstall      "Remove installed files (sudo)"
     row setup-ydotool  "Install ydotool + enable ydotoold.service"
@@ -110,6 +111,54 @@ clean:
     rm -rf {{DIST}} .ruff_cache __pycache__
 
 # ---- Install/System --------------------------------------------------------
+
+# Check that all runtime dependencies are present (Fedora / Debian-Ubuntu).
+doctor:
+    #!/usr/bin/env sh
+    g=$(printf '\033[32m'); rd=$(printf '\033[31m'); y=$(printf '\033[33m')
+    d=$(printf '\033[2m'); z=$(printf '\033[0m')
+    ok()   { printf '  %s✓%s %s\n' "$g" "$z" "$1"; }
+    bad()  { printf '  %s✗%s %s\n' "$rd" "$z" "$1"; miss=1; }
+    warn() { printf '  %s!%s %s\n' "$y" "$z" "$1"; }
+    miss=0
+
+    printf '%sSession%s\n' "$d" "$z"
+    if [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        ok "Wayland session"
+    else
+        warn "not a Wayland session (kde-keybar needs Wayland)"
+    fi
+
+    printf '%sPython + GTK4%s\n' "$d" "$z"
+    command -v python3 >/dev/null 2>&1 && ok "python3" || bad "python3"
+    python3 -c "import gi" 2>/dev/null && ok "PyGObject (python3-gobject / python3-gi)" || bad "PyGObject"
+    python3 -c "import gi; gi.require_version('Gtk','4.0')" 2>/dev/null \
+        && ok "GTK 4 typelib" || bad "GTK 4 (gtk4 / gir1.2-gtk-4.0)"
+    python3 -c "import gi; gi.require_version('Gtk4LayerShell','1.0')" 2>/dev/null \
+        && ok "Gtk4LayerShell typelib" || bad "gtk4-layer-shell (gtk4-layer-shell / gir1.2-gtk4-layer-shell-1.0)"
+    ldconfig -p 2>/dev/null | grep -q libgtk4-layer-shell && ok "libgtk4-layer-shell.so" || bad "libgtk4-layer-shell.so"
+
+    printf '%sydotool%s\n' "$d" "$z"
+    command -v ydotool >/dev/null 2>&1 && ok "ydotool" || bad "ydotool"
+    if systemctl is-active --quiet ydotoold.service 2>/dev/null; then
+        ok "ydotoold.service running"
+    else
+        warn "ydotoold.service not running (run: just setup-ydotool)"
+    fi
+    [ -S /run/ydotoold.socket ] && ok "/run/ydotoold.socket" || warn "/run/ydotoold.socket missing"
+
+    printf '\n'
+    if [ "$miss" = 1 ]; then
+        if command -v dnf >/dev/null 2>&1; then
+            printf 'Install missing (Fedora):\n  sudo dnf install python3-gobject gtk4 gtk4-layer-shell ydotool\n'
+        elif command -v apt >/dev/null 2>&1; then
+            printf 'Install missing (Debian/Ubuntu):\n  sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-gtk4-layer-shell-1.0 ydotool\n'
+        else
+            printf 'Install the packages noted above with your package manager.\n'
+        fi
+        exit 1
+    fi
+    printf '%sAll good.%s\n' "$g" "$z"
 
 # Install kde-keybar to the system (needs sudo).
 install:

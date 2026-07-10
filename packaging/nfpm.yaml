@@ -42,8 +42,8 @@ overrides:
     depends:
       - python3
       - python3-gi
-      - gir1.2-gtk-3.0
-      - gir1.2-gtklayershell-0.1
+      - gir1.2-gtk-4.0
+      - gir1.2-gtk4-layer-shell-1.0
       - ydotool
     contents:
       - src: kde-keybar
@@ -62,8 +62,8 @@ overrides:
     depends:
       - python3
       - python3-gobject
-      - gtk3
-      - gtk-layer-shell
+      - gtk4
+      - gtk4-layer-shell
       - ydotool
     contents:
       - src: kde-keybar

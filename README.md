@@ -44,20 +44,20 @@ You keep using your normal on-screen keyboard for typing, and kde-keybar gives y
 - KDE Plasma 6 on Wayland
 - `python3`
 - PyGObject (`python3-gobject` / `python3-gi`)
-- GTK 3
-- `gtk-layer-shell` (the GTK 3 build, provides the `GtkLayerShell` typelib)
+- GTK 4
+- `gtk4-layer-shell` (provides the `Gtk4LayerShell` typelib)
 - `ydotool` and its `ydotoold` daemon
 
 On Fedora:
 
 ```sh
-sudo dnf install python3-gobject gtk3 gtk-layer-shell ydotool
+sudo dnf install python3-gobject gtk4 gtk4-layer-shell ydotool
 ```
 
 On Debian/Ubuntu:
 
 ```sh
-sudo apt install python3-gi gir1.2-gtk-3.0 gir1.2-gtklayershell-0.1 ydotool
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-gtk4-layer-shell-1.0 ydotool
 ```
 
 ## Installation
@@ -246,7 +246,7 @@ bar keeps the last good config and logs a warning rather than crashing (run `--v
 
 ## Troubleshooting
 
-**The bar doesn't appear.** It must run under the Wayland GDK backend. Start it with `GDK_BACKEND=wayland` (the installed desktop entry already does this). Also confirm `gtk-layer-shell` for GTK 3 is installed.
+**The bar doesn't appear.** It must run under the Wayland GDK backend. Start it with `GDK_BACKEND=wayland` (the installed desktop entry already does this). Also confirm `gtk4-layer-shell` is installed. The script sets `LD_PRELOAD` for `libgtk4-layer-shell.so.0` by re-executing itself; if you package it differently, make sure that preload happens.
 
 **Buttons do nothing.** `ydotoold` is probably not running, or the socket path is wrong. Check `systemctl status ydotoold`, confirm `/run/ydotoold.socket` exists and is owned by your user, and make sure `ydotool_socket` / `YDOTOOL_SOCKET` points at it. Verify `ydotool` is on `PATH`.
 
