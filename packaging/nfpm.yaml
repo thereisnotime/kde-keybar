@@ -10,7 +10,7 @@
 name: kde-keybar
 arch: all
 platform: linux
-version: "${VERSION:-0.1.0}"
+version: "${VERSION}"
 section: utils
 priority: optional
 maintainer: thereisnotime
