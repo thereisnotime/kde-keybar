@@ -125,7 +125,11 @@ install:
         install -Dm0644 config/kde-keybar.example.json "$cfg"
         echo "Wrote default config: $cfg"
     fi
-    echo "Installed. Run 'just setup-ydotool' if you have not enabled ydotoold yet."
+    if systemctl is-active --quiet ydotoold.service && command -v ydotool >/dev/null 2>&1; then
+        echo "Installed. ydotoold is running, you are all set."
+    else
+        echo "Installed. ydotoold is not running yet, run 'just setup-ydotool' to enable it."
+    fi
 
 # Remove installed files (needs sudo). Leaves your user config in place.
 uninstall:
