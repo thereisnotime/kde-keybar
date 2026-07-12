@@ -8,6 +8,7 @@ your own config.
 |---|---|
 | [minimal.json](minimal.json) | Five essential keys, defaults for everything else. |
 | [dock-top.json](dock-top.json) | Always-on dock across the top; windows do not cover it. |
+| [push-windows.json](push-windows.json) | Tracks the keyboard and reserves its space so windows are pushed above the OSK. |
 | [transparent.json](transparent.json) | Transparent bar with rounded keys. |
 | [zellij.json](zellij.json) | zellij/tmux prefix + navigation, catppuccin theme. |
 | [vim.json](vim.json) | Vim keys (Esc, `:`, `/`, jumps), gruvbox theme. |

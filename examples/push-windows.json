@@ -1,0 +1,15 @@
+{
+  "dock": "keyboard",
+  "position": "bottom",
+  "visibility": "keyboard",
+  "theme": "dark",
+  "buttons": [
+    { "label": "Esc", "keys": ["ESC"] },
+    { "label": "Tab", "keys": ["TAB"] },
+    { "label": "^C", "keys": ["LCTRL", "C"] },
+    { "label": "↑", "keys": ["UP"] },
+    { "label": "↓", "keys": ["DOWN"] },
+    { "label": "←", "keys": ["LEFT"] },
+    { "label": "→", "keys": ["RIGHT"] }
+  ]
+}

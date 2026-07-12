@@ -9,7 +9,7 @@ defaults on first run, and any keys you omit fall back to those defaults. Change
 | `position` | string | `"bottom"` | `"bottom"` places the bar above the OSK; `"top"` anchors it to the top edge. |
 | `visibility` | string | `"keyboard"` | `"keyboard"` auto-shows/hides with the OSK via D-Bus; `"always"` keeps the bar on screen (and hugs the edge, no OSK margin). |
 | `layer` | string | `"overlay"` | Stacking layer: `overlay` (above everything), `top`, `bottom`, or `background`. |
-| `dock` | bool | `false` | Reserve space so windows do not slide under the bar (panel/dock behavior). Best with `visibility: "always"`. |
+| `dock` | string/bool | `false` | Reserve space so windows avoid the bar. `false` (overlay, default), `"bar"` (reserve the strip), or `"keyboard"` (reserve the whole band up to the top of the bar, keyboard height included, so windows are pushed above the on-screen keyboard too). `true` is an alias for `"bar"`. |
 | `monitor` | int or null | `null` | Output index to place the bar on. `null` uses the compositor default. |
 | `font_px` | int | `20` | Button label font size in pixels. |
 | `button_height_px` | int | `54` | Thickness of the strip (button height). |
@@ -101,8 +101,23 @@ the keyboard), for example a permanent shortcut strip at the top:
 { "visibility": "always", "position": "top", "dock": true }
 ```
 
-`dock: true` reserves the bar's height so maximized windows sit next to it, not under it. See
-[`examples/dock-top.json`](../examples/dock-top.json).
+`dock: "bar"` (or `true`) reserves the bar's height so maximized windows sit next to it, not under
+it. See [`examples/dock-top.json`](../examples/dock-top.json).
+
+### Push windows above the keyboard
+
+The built-in on-screen keyboards only hover over windows; KWin does not reserve space for them.
+You can get that effect anyway: with `dock: "keyboard"` and `visibility: "keyboard"`, the bar
+reserves the whole band from the screen edge up to the top of the strip, keyboard height included.
+KWin then pushes windows above that band, so the on-screen keyboard (which draws in the reserved
+space) no longer covers your windows. The reservation appears and disappears with the keyboard.
+
+```json
+{ "dock": "keyboard", "position": "bottom", "visibility": "keyboard" }
+```
+
+The reserved height uses the same `keyboard_height_fraction` estimate as the bar placement, so tune
+that (or `margin_px`) if the reserved band does not match your keyboard exactly.
 
 ## Commands
 

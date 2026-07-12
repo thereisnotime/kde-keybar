@@ -314,7 +314,7 @@ DEFAULT_CONFIG = {
     "position": "bottom",  # "bottom" (above OSK) or "top"
     "visibility": "keyboard",  # "keyboard" (auto-hide with OSK) or "always"
     "layer": "overlay",  # overlay | top | bottom | background (stacking layer)
-    "dock": False,  # reserve space so windows do not go under the bar (panel mode)
+    "dock": False,  # false | "bar" | "keyboard": reserve space so windows avoid the bar/OSK
     "monitor": None,  # output index to show on; null = compositor default
     "font_px": 20,
     "button_height_px": 54,  # thickness of the strip
@@ -455,9 +455,17 @@ def build_window(cfg, send):
         GtkLayerShell.set_anchor(win, GtkLayerShell.Edge.BOTTOM, True)
         GtkLayerShell.set_margin(win, GtkLayerShell.Edge.BOTTOM, bottom_margin_px(cfg))
 
-    if cfg.get("dock"):
-        # Reserve space so windows do not slide under the bar (panel/dock behavior).
-        GtkLayerShell.auto_exclusive_zone_enable(win)
+    # dock: false = overlay; "bar" = reserve the strip; "keyboard" = reserve the whole
+    # band up to the top of the bar (keyboard margin + bar) so windows are pushed above
+    # the on-screen keyboard too, not just the strip. true is an alias for "bar".
+    dock = cfg.get("dock", False)
+    dock = "bar" if dock is True else ("none" if not dock else str(dock))
+    if dock != "none":
+        bar_h = _int(cfg.get("button_height_px", 54), 54) + 8
+        if dock == "keyboard" and cfg.get("position") != "top":
+            GtkLayerShell.set_exclusive_zone(win, bottom_margin_px(cfg) + bar_h)
+        else:
+            GtkLayerShell.set_exclusive_zone(win, bar_h)
 
     # Buttons fill the width; `overflow` decides what happens when they do not fit:
     #   "scroll" (default) -> single row, extra scrolls sideways
@@ -616,8 +624,8 @@ def validate_config(path):
         errs.append("overflow must be 'scroll' or 'wrap'")
     if cfg.get("layer", "overlay") not in ("overlay", "top", "bottom", "background"):
         errs.append("layer must be 'overlay', 'top', 'bottom', or 'background'")
-    if "dock" in cfg and not isinstance(cfg["dock"], bool):
-        errs.append("dock must be true or false")
+    if "dock" in cfg and cfg["dock"] not in (True, False, "none", "bar", "keyboard"):
+        errs.append('dock must be false, true, "bar", or "keyboard"')
     if cfg.get("monitor") is not None and not isinstance(cfg.get("monitor"), int):
         errs.append("monitor must be an integer or null")
     for k in ("font_px", "button_height_px", "button_min_width_px", "gap_px"):
