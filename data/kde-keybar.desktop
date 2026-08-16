@@ -7,3 +7,8 @@ X-KDE-autostart-phase=2
 OnlyShowIn=KDE;
 NoDisplay=true
 Terminal=false
+# Under a systemd-managed session, kde-keybar.service starts the bar instead.
+# This stops systemd-xdg-autostart-generator from turning this file into a
+# second, restart-less unit that would race the real one. Sessions that do not
+# use systemd still autostart from this entry as before.
+X-systemd-skip=true

@@ -34,6 +34,7 @@ rm -rf %{buildroot}
 install -Dpm 0755 kde-keybar %{buildroot}%{_bindir}/kde-keybar
 install -Dpm 0644 data/kde-keybar.desktop %{buildroot}%{_sysconfdir}/xdg/autostart/kde-keybar.desktop
 install -Dpm 0644 data/ydotoold.service %{buildroot}%{_unitdir}/ydotoold.service
+install -Dpm 0644 data/kde-keybar.service %{buildroot}%{_userunitdir}/kde-keybar.service
 install -Dpm 0644 config/kde-keybar.example.json %{buildroot}%{_docdir}/%{name}/kde-keybar.example.json
 install -Dpm 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 
@@ -42,6 +43,7 @@ install -Dpm 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 %{_bindir}/kde-keybar
 %config(noreplace) %{_sysconfdir}/xdg/autostart/kde-keybar.desktop
 %{_unitdir}/ydotoold.service
+%{_userunitdir}/kde-keybar.service
 %dir %{_docdir}/%{name}
 %doc %{_docdir}/%{name}/kde-keybar.example.json
 

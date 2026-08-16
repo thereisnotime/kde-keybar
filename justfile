@@ -167,6 +167,13 @@ install:
     sudo install -Dm0755 kde-keybar /usr/bin/kde-keybar
     sudo install -Dm0644 data/kde-keybar.desktop /etc/xdg/autostart/kde-keybar.desktop
     sudo install -Dm0644 data/ydotoold.service /usr/lib/systemd/system/ydotoold.service
+    sudo install -Dm0644 data/kde-keybar.service /usr/lib/systemd/user/kde-keybar.service
+    # The user unit owns startup now; it restarts the bar when the compositor
+    # drops it. Any leftover autostart-generated unit is stopped first so the
+    # two do not race.
+    systemctl --user stop 'app-kde\x2dkeybar@autostart.service' 2>/dev/null || true
+    systemctl --user daemon-reload
+    systemctl --user enable --now kde-keybar.service
     cfg="${XDG_CONFIG_HOME:-$HOME/.config}/kde-keybar.json"
     if [ -e "$cfg" ]; then
         echo "Config already exists, leaving it alone: $cfg"
@@ -184,9 +191,12 @@ install:
 uninstall:
     #!/usr/bin/env sh
     set -eu
+    systemctl --user disable --now kde-keybar.service 2>/dev/null || true
     sudo rm -f /usr/bin/kde-keybar
     sudo rm -f /etc/xdg/autostart/kde-keybar.desktop
     sudo rm -f /usr/lib/systemd/system/ydotoold.service
+    sudo rm -f /usr/lib/systemd/user/kde-keybar.service
+    systemctl --user daemon-reload
     echo "Removed system files. Your user config was left untouched."
 
 # Install ydotool and enable the ydotoold service.

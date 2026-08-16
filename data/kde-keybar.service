@@ -1,0 +1,24 @@
+[Unit]
+Description=KDE Keybar
+Documentation=https://github.com/thereisnotime/kde-keybar
+# Tied to the graphical session: starts with it, stops with it. PartOf= means a
+# session teardown stops the bar instead of leaving it to fail on a dead socket.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=GDK_BACKEND=wayland
+ExecStart=/usr/bin/kde-keybar
+# The bar exits non-zero when its Wayland connection drops (a compositor restart
+# or crash). Without this it stays dead until the next login, which can be weeks
+# on a machine that only ever suspends.
+Restart=on-failure
+RestartSec=2
+# Don't hammer the compositor if it is genuinely gone: 5 tries per minute, then
+# give up until the session restarts.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=graphical-session.target

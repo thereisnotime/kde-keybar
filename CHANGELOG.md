@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `data/kde-keybar.service`, a user unit that owns startup and **restarts the bar
+  when it dies**. kde-keybar exits non-zero if its Wayland connection drops (a
+  compositor crash or restart); previously the XDG autostart entry had no way to
+  express a restart policy, so the bar stayed dead until the next login, which can
+  be weeks on a machine that only suspends. `PartOf=graphical-session.target` still
+  stops it cleanly on logout, and `StartLimitBurst=5` avoids hammering a compositor
+  that is genuinely gone. Installed by `just install` and by both packages.
+- `X-systemd-skip=true` in the autostart entry, so `systemd-xdg-autostart-generator`
+  no longer creates a second, restart-less unit that would race the real one.
+  Non-systemd sessions still autostart from the `.desktop` as before.
+
 - `Copy` and `Paste` buttons in the default button set, sending `Ctrl+C` / `Ctrl+V`.
   These are the GUI chords: in a terminal `Copy` sends SIGINT, exactly like the
   existing `^C` button. Swap them for `Ctrl+Shift+C` / `Ctrl+Shift+V` if you mostly
