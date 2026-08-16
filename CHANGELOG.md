@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `Copy` and `Paste` buttons in the default button set, sending `Ctrl+C` / `Ctrl+V`.
+  These are the GUI chords: in a terminal `Copy` sends SIGINT, exactly like the
+  existing `^C` button. Swap them for `Ctrl+Shift+C` / `Ctrl+Shift+V` if you mostly
+  use the bar over a terminal.
+
 ## [0.1.0] - 2026-07-10
 
 Initial release.

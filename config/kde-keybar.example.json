@@ -23,6 +23,8 @@
     { "label": "^D",      "keys": ["LCTRL", "D"] },
     { "label": "^L",      "keys": ["LCTRL", "L"] },
     { "label": "^R",      "keys": ["LCTRL", "R"] },
+    { "label": "Copy",    "keys": ["LCTRL", "C"] },
+    { "label": "Paste",   "keys": ["LCTRL", "V"] },
     { "label": "←",       "keys": ["LEFT"] },
     { "label": "↓",       "keys": ["DOWN"] },
     { "label": "↑",       "keys": ["UP"] },
