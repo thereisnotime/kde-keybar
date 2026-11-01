@@ -20,6 +20,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 
 import gi
 
@@ -121,6 +122,27 @@ KEYCODES.update(
         "Z": 44,
     }
 )
+
+# Keys offered after tapping a {"modifier": ...} button (one-shot Ctrl/Alt/Super).
+# Tapping one sends modifier+key, then the bar returns to the normal buttons.
+MODIFIER_KEYS = [
+    *"QWERTYUIOPASDFGHJKLZXCVBNM",
+    "LEFT", "DOWN", "UP", "RIGHT", "TAB", "ENTER", "SPACE", "BACKSPACE", "DELETE",
+    "HOME", "END", "PGUP", "PGDN", "ESC",
+    *"1234567890",
+    "MINUS", "EQUAL", "LEFTBRACE", "RIGHTBRACE", "BACKSLASH", "SEMICOLON", "APOSTROPHE",
+    "GRAVE", "COMMA", "DOT", "SLASH",
+]  # fmt: skip
+KEY_LABELS = {
+    "LEFT": "←", "DOWN": "↓", "UP": "↑", "RIGHT": "→", "TAB": "Tab", "ENTER": "⏎",
+    "SPACE": "Space", "BACKSPACE": "⌫", "DELETE": "Del", "HOME": "Home", "END": "End",
+    "PGUP": "PgUp", "PGDN": "PgDn", "ESC": "Esc", "MINUS": "-", "EQUAL": "=",
+    "LEFTBRACE": "[", "RIGHTBRACE": "]", "BACKSLASH": "\\", "SEMICOLON": ";",
+    "APOSTROPHE": "'", "GRAVE": "`", "COMMA": ",", "DOT": ".", "SLASH": "/",
+}  # fmt: skip
+
+# Single keys that auto-repeat while held unless the button sets "repeat": false.
+REPEAT_KEYS = {"UP", "DOWN", "LEFT", "RIGHT", "BACKSPACE", "DELETE", "PGUP", "PGDN", "SPACE"}
 
 DEFAULT_CONFIG_PATH = os.path.join(
     os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")), "kde-keybar.json"
@@ -324,11 +346,16 @@ DEFAULT_CONFIG = {
     "margin_px": None,  # hard override of the bottom margin; null = auto
     "keyboard_height_fraction": {"landscape": 0.30, "portrait": 0.24},
     "ydotool_socket": "/run/ydotoold.socket",
+    # Holding a key repeats it like a hardware keyboard. Applies to buttons with
+    # "repeat": true, and by default to single navigation/editing keys (REPEAT_KEYS).
+    "repeat_delay_ms": 400,
+    "repeat_interval_ms": 50,
     "theme": "dark",  # dark | light | nord | solarized | transparent | matrix
     "style": {},  # override individual theme keys here (see README)
     "buttons": [
         {"label": "Esc", "keys": ["ESC"]},
         {"label": "Tab", "keys": ["TAB"]},
+        {"label": "Ctrl", "modifier": "LCTRL"},
         {"label": "Alt+Tab", "keys": ["LALT", "TAB"]},
         {"label": "^C", "keys": ["LCTRL", "C"]},
         {"label": "^B", "keys": ["LCTRL", "B"]},
@@ -342,7 +369,44 @@ DEFAULT_CONFIG = {
         {"label": "↑", "keys": ["UP"]},
         {"label": "→", "keys": ["RIGHT"]},
         {"label": "⏎", "keys": ["ENTER"]},
+        {"label": "🎤", "action": "dictate"},
     ],
+    # Speech-to-text for the {"action": "dictate"} button. Runs fully offline: audio is
+    # recorded locally and transcribed by an open model (whisper.cpp by default). Both
+    # commands are argv templates; {wav}, {model} and {language} are substituted.
+    "dictation": {
+        "record_command": [
+            "parecord",
+            "--channels=1",
+            "--rate=16000",
+            "--format=s16le",
+            "--file-format=wav",
+            "--latency-msec=50",  # default buffering drops the first ~second of speech
+            "{wav}",
+        ],
+        "transcribe_command": [
+            "whisper-cli",
+            "-m",
+            "{model}",
+            "-f",
+            "{wav}",
+            "-l",
+            "{language}",
+            "-ac",  # shrink whisper's fixed 30 s window to the clip: the big speed win
+            "{audio_ctx}",
+            "-bs",  # greedy decoding (beam/best-of 1): faster, barely less accurate
+            "1",
+            "-bo",
+            "1",
+            "-nt",
+            "-np",
+        ],
+        "model": "~/.local/share/kde-keybar/models/ggml-base.en.bin",
+        "language": "en",
+        "output": "type",  # "type" (ydotool type, ASCII only) or "paste" (wl-copy + paste_keys)
+        "paste_keys": ["LCTRL", "V"],
+        "max_seconds": 120,
+    },
 }
 
 
@@ -388,6 +452,199 @@ def make_sender(cfg):
     return send
 
 
+class Dictation:
+    """Toggle-to-talk: first tap records, second tap stops, transcribes, and types.
+
+    Everything runs off the GLib main loop (Gio.Subprocess), so the bar never blocks
+    while the model is working. One instance per window build; cancel() on reload."""
+
+    IDLE, RECORDING, TRANSCRIBING = range(3)
+
+    def __init__(self, cfg, send):
+        self.dc = {**DEFAULT_CONFIG["dictation"], **(cfg.get("dictation") or {})}
+        self.send = send
+        self.socket = os.environ.get("YDOTOOL_SOCKET", cfg["ydotool_socket"])
+        self.state = self.IDLE
+        self.rec = None
+        self.wav = None
+        self.timer = None
+        self.buttons = []  # (button, idle_label)
+
+    def attach(self, button):
+        self.buttons.append((button, button.get_label()))
+        button.connect("clicked", lambda _b: self.toggle())
+
+    def _show(self, label=None, css=None):
+        for b, idle in self.buttons:
+            b.set_label(label or idle)
+            for c in ("dictating", "transcribing"):
+                b.remove_css_class(c)
+            if css:
+                b.add_css_class(css)
+
+    def _flash(self, msg):
+        print(f"kde-keybar: dictation: {msg}", file=sys.stderr)
+        self._show(msg)
+        GLib.timeout_add_seconds(2, lambda: (self.state == self.IDLE and self._show(), False)[1])
+
+    def audio_ctx(self):
+        """Whisper encoder context for this clip. Whisper always encodes a 30 s window
+        (1500 frames) even for a 3 s clip; sizing it to the clip (plus headroom, and a
+        floor because very small contexts hurt accuracy) cuts encode time several-fold."""
+        try:
+            secs = max(0, os.path.getsize(self.wav) - 44) / 32000  # 16 kHz mono s16
+        except (OSError, TypeError):
+            return 1500
+        return max(384, min(1500, int(secs * 50) + 128))
+
+    def _fill(self, argv):
+        subs = {
+            "{wav}": self.wav or "",
+            "{model}": os.path.expanduser(str(self.dc.get("model", ""))),
+            "{language}": str(self.dc.get("language", "en")),
+            "{audio_ctx}": str(self.audio_ctx()) if self.wav else "1500",
+        }
+        out = []
+        for a in argv:
+            a = str(a)
+            for k, v in subs.items():
+                a = a.replace(k, v)
+            out.append(a)
+        return out
+
+    def toggle(self):
+        if self.state == self.IDLE:
+            self.start()
+        elif self.state == self.RECORDING:
+            self.stop()
+        # taps while transcribing are ignored
+
+    def start(self):
+        model = os.path.expanduser(str(self.dc.get("model", "")))
+        if "{model}" in " ".join(map(str, self.dc["transcribe_command"])) and not os.path.isfile(
+            model
+        ):
+            self._flash("no model")
+            print(f"  expected a model at {model} (try: just setup-dictation)", file=sys.stderr)
+            return
+        rundir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
+        fd, self.wav = tempfile.mkstemp(prefix="kde-keybar-", suffix=".wav", dir=rundir)
+        os.close(fd)
+        try:
+            self.rec = Gio.Subprocess.new(
+                self._fill(self.dc["record_command"]), Gio.SubprocessFlags.STDERR_SILENCE
+            )
+        except GLib.Error as e:
+            self._cleanup()
+            self._flash("no mic")
+            print(f"  record_command failed: {e.message}", file=sys.stderr)
+            return
+        self.state = self.RECORDING
+        self._show("● Rec", "dictating")
+        max_s = _int(self.dc.get("max_seconds", 120), 120)
+        if max_s > 0:
+            self.timer = GLib.timeout_add_seconds(max_s, self._timeout)
+
+    def _timeout(self):
+        self.timer = None
+        if self.state == self.RECORDING:
+            self.stop()
+        return False
+
+    def stop(self):
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+        self.state = self.TRANSCRIBING
+        self._show("…", "transcribing")
+        # SIGINT lets parecord / pw-record flush and finalize the WAV header.
+        self.rec.send_signal(signal.SIGINT)
+        self.rec.wait_async(None, self._recorded)
+
+    def _recorded(self, proc, res):
+        try:
+            proc.wait_finish(res)
+        except GLib.Error:
+            pass
+        self.rec = None
+        if self.state != self.TRANSCRIBING:  # cancelled meanwhile
+            return
+        try:
+            tr = Gio.Subprocess.new(
+                self._fill(self.dc["transcribe_command"]),
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE,
+            )
+        except GLib.Error as e:
+            self._done()
+            self._flash("no STT")
+            print(f"  transcribe_command failed: {e.message}", file=sys.stderr)
+            return
+        tr.communicate_utf8_async(None, None, self._transcribed)
+
+    def _transcribed(self, proc, res):
+        try:
+            _ok, out, _err = proc.communicate_utf8_finish(res)
+        except GLib.Error as e:
+            out = ""
+            print(f"kde-keybar: dictation: {e.message}", file=sys.stderr)
+        if self.state != self.TRANSCRIBING:
+            return
+        self._done()
+        text = self.clean(out or "")
+        if not text:
+            self._flash("(nothing)")
+            return
+        self.emit(text)
+
+    @staticmethod
+    def clean(out):
+        """Join model output into one line and drop non-speech tags like [BLANK_AUDIO]."""
+        words = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or (line[0] in "[(" and line[-1] in "])"):
+                continue
+            words.append(line)
+        return " ".join(words).strip()
+
+    def emit(self, text):
+        env = dict(os.environ, YDOTOOL_SOCKET=self.socket)
+        try:
+            if self.dc.get("output") == "paste":
+                subprocess.run(["wl-copy", "--", text], check=True, timeout=5)
+                codes = resolve_keys(self.dc.get("paste_keys") or ["LCTRL", "V"])
+                GLib.timeout_add(80, lambda: (self.send(codes), False)[1])
+            else:
+                subprocess.Popen(["ydotool", "type", "--", text], env=env)
+        except (OSError, subprocess.SubprocessError) as e:
+            self._flash("type failed")
+            print(f"  {e}", file=sys.stderr)
+
+    def _done(self):
+        self.state = self.IDLE
+        self._cleanup()
+        self._show()
+
+    def _cleanup(self):
+        if self.wav:
+            try:
+                os.unlink(self.wav)
+            except OSError:
+                pass
+            self.wav = None
+
+    def cancel(self):
+        """Drop any in-flight recording (used when the window is rebuilt)."""
+        if self.timer:
+            GLib.source_remove(self.timer)
+            self.timer = None
+        if self.rec:
+            self.rec.force_exit()
+            self.rec = None
+        self.state = self.IDLE
+        self._cleanup()
+
+
 def _int(v, default):
     """int(v) but falls back to default on bad values (keeps a bad config non-fatal)."""
     try:
@@ -427,7 +684,57 @@ def bottom_margin_px(cfg):
         return 320 + gap
 
 
-def build_window(cfg, send):
+def attach_repeat(button, codes, send, cfg):
+    """Press-and-hold auto-repeat that leaves GtkButton's own gesture alone.
+
+    A tap still sends once via "clicked". While the button stays :active (finger or
+    mouse down) for repeat_delay_ms, it starts repeating every repeat_interval_ms; the
+    release that ends a repeat run does not send again. Watching :active instead of
+    adding a GestureClick matters: a second gesture would either fight the button or
+    claim the touch (breaking swipe-to-scroll), and GestureClick also emits "stopped"
+    when its double-click timeout expires, which killed the repeat mid-hold. A swipe
+    that turns into a scroll cancels the button, clears :active, and stops the repeat."""
+    delay = max(50, _int(cfg.get("repeat_delay_ms", 400), 400))
+    interval = max(15, _int(cfg.get("repeat_interval_ms", 50), 50))
+    st = {"timer": None, "held": False, "repeated": False}
+
+    def stop():
+        if st["timer"]:
+            GLib.source_remove(st["timer"])
+            st["timer"] = None
+
+    def tick():
+        send(codes)
+        st["repeated"] = True
+        st["timer"] = GLib.timeout_add(interval, tick)
+        return False
+
+    def first():
+        st["timer"] = None
+        return tick()
+
+    def on_flags(b, _prev):
+        active = bool(b.get_state_flags() & Gtk.StateFlags.ACTIVE)
+        if active and not st["held"]:
+            st["held"], st["repeated"] = True, False
+            stop()
+            st["timer"] = GLib.timeout_add(delay, first)
+        elif not active and st["held"]:
+            st["held"] = False
+            stop()
+
+    def on_clicked(_b):
+        if st["repeated"]:
+            st["repeated"] = False
+            return
+        send(codes)
+
+    button.connect("state-flags-changed", on_flags)
+    button.connect("clicked", on_clicked)
+    button.connect("unrealize", lambda *_: stop())
+
+
+def build_window(cfg, send, dictation=None):
     win = Gtk.Window()
     GtkLayerShell.init_for_window(win)
     layers = {
@@ -480,39 +787,86 @@ def build_window(cfg, send):
     g = _monitor_geometry()
     screen_w = g.width if g is not None else 1280
 
+    layers = {}
+
+    def show(name):
+        win.set_child(layers[name])
+        return False
+
+    def open_modifier(spec):
+        """Swap in a grid of keys that each send modifier+key once, then swap back."""
+        mod = str(spec["modifier"]).upper()
+        name = f"mod:{mod}"
+        if name not in layers:
+            label = spec.get("label", mod)
+            specs = [{"label": f"{label} ✕", "_back": True, "_latched": True}]
+            for k in spec.get("keys") or cfg.get("modifier_keys") or MODIFIER_KEYS:
+                ku = str(k).upper()
+                specs.append({"label": KEY_LABELS.get(ku, ku), "keys": [mod, ku], "_back": True})
+            layers[name] = make_row(specs, wrap=True)
+        show(name)
+
     def make_button(spec):
-        codes = resolve_keys(spec.get("keys", []))
         b = Gtk.Button(label=spec.get("label", "?"))
         b.set_focusable(False)
         b.set_size_request(minw, bh)
-        b.connect("clicked", lambda _b, c=codes: send(c))
+        if spec.get("_latched"):
+            b.add_css_class("latched")
+        if spec.get("_back"):
+            if spec.get("keys"):
+                codes = resolve_keys(spec["keys"])
+                b.connect("clicked", lambda _b, c=codes: send(c))
+            # idle: do not swap the child out from under the button mid-signal
+            b.connect("clicked", lambda _b: GLib.idle_add(show, "main"))
+            return b
+        if spec.get("modifier"):
+            b.connect("clicked", lambda _b, sp_=spec: open_modifier(sp_))
+            return b
+        if spec.get("action") == "dictate" and dictation is not None:
+            dictation.attach(b)
+            return b
+        keys = spec.get("keys", [])
+        codes = resolve_keys(keys)
+        repeat = spec.get("repeat")
+        if repeat is None:
+            repeat = len(keys) == 1 and str(keys[0]).upper() in REPEAT_KEYS
+        if repeat:
+            attach_repeat(b, codes, send, cfg)
+        else:
+            b.connect("clicked", lambda _b, c=codes: send(c))
         return b
 
-    if cfg.get("overflow") == "wrap":
-        wrapper = Gtk.FlowBox()
-        wrapper.set_selection_mode(Gtk.SelectionMode.NONE)
-        wrapper.set_homogeneous(True)
-        wrapper.set_max_children_per_line(max(1, len(cfg["buttons"])))
-        wrapper.set_min_children_per_line(1)
-        wrapper.set_row_spacing(sp)
-        wrapper.set_column_spacing(sp)
-        wrapper.set_size_request(screen_w - 2 * sp, -1)  # real width -> correct row count/height
-        for spec in cfg["buttons"]:
-            wrapper.append(make_button(spec))
-    else:
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=sp)
-        box.set_homogeneous(True)
-        box.set_size_request(screen_w - 2 * sp, -1)  # fill width; grows -> scrolls
-        for spec in cfg["buttons"]:
-            box.append(make_button(spec))
-        wrapper = Gtk.ScrolledWindow()
-        wrapper.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
-        wrapper.set_propagate_natural_height(True)
-        wrapper.set_child(box)
+    def make_row(specs, wrap):
+        if wrap:
+            wrapper = Gtk.FlowBox()
+            wrapper.set_selection_mode(Gtk.SelectionMode.NONE)
+            wrapper.set_homogeneous(True)
+            wrapper.set_max_children_per_line(max(1, len(specs)))
+            wrapper.set_min_children_per_line(1)
+            wrapper.set_row_spacing(sp)
+            wrapper.set_column_spacing(sp)
+            wrapper.set_size_request(screen_w - 2 * sp, -1)  # real width -> right row count
+            for spec in specs:
+                wrapper.append(make_button(spec))
+        else:
+            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=sp)
+            box.set_homogeneous(True)
+            box.set_size_request(screen_w - 2 * sp, -1)  # fill width; grows -> scrolls
+            for spec in specs:
+                box.append(make_button(spec))
+            wrapper = Gtk.ScrolledWindow()
+            # AUTOMATIC keeps touch/wheel scrolling; the scrollbar itself is hidden in CSS.
+            # (EXTERNAL hides it too but also stops touch drag-scrolling.)
+            wrapper.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+            wrapper.set_propagate_natural_height(True)
+            wrapper.set_child(box)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(wrapper, f"set_margin_{m}")(sp)
+        return wrapper
 
-    for m in ("top", "bottom", "start", "end"):
-        getattr(wrapper, f"set_margin_{m}")(sp)
-    win.set_child(wrapper)
+    layers["main"] = make_row(cfg["buttons"], cfg.get("overflow") == "wrap")
+    show("main")
+    win.kde_keybar_show_layer = show  # lets visibility changes reset to the main layer
 
     return win
 
@@ -538,6 +892,11 @@ def apply_css(cfg, display, state):
                   border-radius: {_int(sv("button_radius_px", 8), 8)}px; }}
         button:hover {{ background: {sv("button_hover_bg", "#44454c")}; }}
         button:active {{ background: {sv("button_active_bg", "#5a6cff")}; }}
+        button.dictating {{ background: {sv("button_recording_bg", "#c0392b")};
+                            color: #ffffff; }}
+        scrolledwindow scrollbar {{ opacity: 0; min-height: 0; min-width: 0; }}
+        button.latched {{ background: {sv("button_active_bg", "#5a6cff")}; }}
+        button.transcribing {{ background: {sv("button_active_bg", "#5a6cff")}; }}
     """
     )
     if state.get("css"):
@@ -574,7 +933,10 @@ def setup_visibility(state):
         win = state.get("win")
         if not win:
             return
-        win.set_visible(bool(state.get("always") or get_visible()))
+        visible = bool(state.get("always") or get_visible())
+        if not visible and hasattr(win, "kde_keybar_show_layer"):
+            win.kde_keybar_show_layer("main")  # a half-finished Ctrl+… does not linger
+        win.set_visible(visible)
 
     for member in ("visibleChanged", "enabledChanged", "activeChanged"):
         bus.signal_subscribe(
@@ -599,8 +961,11 @@ STYLE_KEYS = {
     "button_padding_px",
     "button_hover_bg",
     "button_active_bg",
+    "button_recording_bg",
     "font_family",
 }
+
+BUTTON_ACTIONS = {"dictate"}
 
 
 def validate_config(path):
@@ -630,7 +995,14 @@ def validate_config(path):
         errs.append('dock must be false, true, "bar", or "keyboard"')
     if cfg.get("monitor") is not None and not isinstance(cfg.get("monitor"), int):
         errs.append("monitor must be an integer or null")
-    for k in ("font_px", "button_height_px", "button_min_width_px", "gap_px"):
+    for k in (
+        "font_px",
+        "button_height_px",
+        "button_min_width_px",
+        "gap_px",
+        "repeat_delay_ms",
+        "repeat_interval_ms",
+    ):
         if k in cfg and not isinstance(cfg[k], int):
             errs.append(f"{k} must be an integer")
     if cfg.get("margin_px") is not None and not isinstance(cfg.get("margin_px"), int):
@@ -645,14 +1017,45 @@ def validate_config(path):
         errs.append("'buttons' must be a non-empty list")
     else:
         for i, b in enumerate(btns):
+            if isinstance(b, dict) and "modifier" in b:
+                if KEYCODES.get(str(b["modifier"]).upper()) is None:
+                    errs.append(f"button[{i}]: unknown modifier key '{b['modifier']}'")
+                for kname in b.get("keys") or []:
+                    if KEYCODES.get(str(kname).upper()) is None:
+                        errs.append(f"button[{i}]: unknown key '{kname}'")
+                continue
+            if isinstance(b, dict) and "action" in b:
+                if b["action"] not in BUTTON_ACTIONS:
+                    errs.append(f"button[{i}]: unknown action '{b['action']}'")
+                continue
             if not isinstance(b, dict) or "keys" not in b:
-                errs.append(f"button[{i}] must be an object with 'keys'")
+                errs.append(f"button[{i}] must be an object with 'keys' or 'action'")
                 continue
             if "label" not in b:
                 warns.append(f"button[{i}] has no 'label'")
+            if "repeat" in b and not isinstance(b["repeat"], bool):
+                errs.append(f"button[{i}]: repeat must be true or false")
             for kname in b.get("keys", []):
                 if KEYCODES.get(kname) is None and KEYCODES.get(str(kname).upper()) is None:
                     errs.append(f"button[{i}] ({b.get('label', '?')}): unknown key '{kname}'")
+    for kname in cfg.get("modifier_keys") or []:
+        if KEYCODES.get(str(kname).upper()) is None:
+            errs.append(f"modifier_keys: unknown key '{kname}'")
+    dc = cfg.get("dictation")
+    if dc is not None:
+        if not isinstance(dc, dict):
+            errs.append("dictation must be an object")
+        else:
+            for k in dc:
+                if k not in DEFAULT_CONFIG["dictation"]:
+                    warns.append(f"dictation: unknown key '{k}'")
+            for k in ("record_command", "transcribe_command"):
+                if k in dc and (not isinstance(dc[k], list) or not dc[k]):
+                    errs.append(f"dictation.{k} must be a non-empty list (argv)")
+            if dc.get("output", "type") not in ("type", "paste"):
+                errs.append("dictation.output must be 'type' or 'paste'")
+            if "max_seconds" in dc and not isinstance(dc["max_seconds"], int):
+                errs.append("dictation.max_seconds must be an integer")
     return errs, warns
 
 
@@ -720,7 +1123,9 @@ def main(argv=None):
         win = None
         try:
             cfg = load_config(args.config)
-            win = build_window(cfg, make_sender(cfg))
+            send = make_sender(cfg)
+            dictation = Dictation(cfg, send)
+            win = build_window(cfg, send, dictation)
             apply_css(cfg, win.get_display(), state)
         except Exception as e:
             print(f"kde-keybar: reload failed, keeping current config ({e})", file=sys.stderr)
@@ -728,6 +1133,9 @@ def main(argv=None):
                 win.destroy()
             return False
         old = state.get("win")
+        if state.get("dictation"):
+            state["dictation"].cancel()
+        state["dictation"] = dictation
         state["win"] = win
         state["always"] = bool(cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"))
         state["refresh_visibility"]()
@@ -760,6 +1168,8 @@ def main(argv=None):
         pass
 
     loop.run()
+    if state.get("dictation"):
+        state["dictation"].cancel()
 
 
 if __name__ == "__main__":

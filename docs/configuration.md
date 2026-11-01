@@ -14,14 +14,18 @@ defaults on first run, and any keys you omit fall back to those defaults. Change
 | `font_px` | int | `20` | Button label font size in pixels. |
 | `button_height_px` | int | `54` | Thickness of the strip (button height). |
 | `button_min_width_px` | int | `64` | Minimum key width. When keys would be narrower than this, the row scrolls or wraps instead of shrinking further. |
-| `overflow` | string | `"scroll"` | What happens when the keys do not fit one row: `"scroll"` (scroll sideways) or `"wrap"` (flow onto more rows). Keys always fill the width. |
+| `overflow` | string | `"scroll"` | What happens when the keys do not fit one row: `"scroll"` (swipe sideways, no scrollbar is drawn) or `"wrap"` (flow onto more rows). Keys always fill the width. |
 | `gap_px` | int | `0` | Extra pixels between the bar and the keyboard. Positive nudges up, negative nudges down. |
 | `margin_px` | int or null | `null` | Hard override of the bottom margin in pixels. `null` means auto-compute from the OSK height. Added on top of `gap_px`. |
 | `keyboard_height_fraction` | object | `{ "landscape": 0.30, "portrait": 0.24 }` | Fraction of the screen height the OSK is assumed to cover, used to auto-place the bar above it. Selected by orientation. |
 | `ydotool_socket` | string | `"/run/ydotoold.socket"` | Path to the `ydotoold` socket. Overridden by the `YDOTOOL_SOCKET` env var. |
+| `repeat_delay_ms` | int | `400` | How long a key must be held before it starts repeating. |
+| `repeat_interval_ms` | int | `50` | Time between repeats while held (50 ms = 20 keys/s). |
 | `theme` | string | `"dark"` | Built-in palette (run `kde-keybar --list-themes`). |
 | `style` | object | `{}` | Overrides individual theme keys (see [theming](#theming)). |
-| `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`. |
+| `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`, `{ "label": "Ctrl", "modifier": "LCTRL" }` for a [one-shot modifier](#one-shot-ctrl--alt), or `{ "label": "🎤", "action": "dictate" }` for the [dictation](#dictation) button. |
+| `modifier_keys` | array | A–Z, arrows, Tab, ⏎, digits, symbols | Keys offered after tapping a `modifier` button. |
+| `dictation` | object | see [dictation](#dictation) | Recorder, speech model, and output settings for the dictation button. |
 
 ## Buttons and key chords
 
@@ -43,6 +47,38 @@ Supported key names (from the script's `KEYCODES` map):
 
 Key names are matched case-insensitively. Unknown names are skipped with a warning on stderr.
 
+### One-shot Ctrl / Alt
+
+The on-screen keyboards commit letters as text, so a Ctrl held down by kde-keybar would not
+combine with a letter typed on them. A `modifier` button solves it inside the bar instead:
+tap **Ctrl**, the bar turns into a grid of keys (A–Z, arrows, Tab, ⏎, digits, symbols), tap one,
+and kde-keybar sends Ctrl+that key and switches straight back. Tap **Ctrl ✕** to cancel. The
+grid also closes when the on-screen keyboard hides.
+
+```json
+{ "label": "Ctrl", "modifier": "LCTRL" },
+{ "label": "Alt",  "modifier": "LALT" },
+{ "label": "^⇧",   "modifier": "LCTRL", "keys": ["C", "V", "T", "W"] }
+```
+
+`keys` on a modifier button limits its grid; otherwise the top-level `modifier_keys` list (or the
+built-in one) is used. For two modifiers at once, combine them in a plain chord button instead,
+e.g. `{ "label": "^⇧V", "keys": ["LCTRL", "LSHIFT", "V"] }`.
+
+### Hold to repeat
+
+Holding a button sends the chord once, waits `repeat_delay_ms`, then repeats every
+`repeat_interval_ms` until you let go, like a hardware keyboard. This is on by default for
+single-key buttons on `UP`, `DOWN`, `LEFT`, `RIGHT`, `BACKSPACE`, `DELETE`, `PGUP`, `PGDN`, and
+`SPACE`. Turn it on or off per button with `"repeat"`:
+
+```json
+{ "label": "^W", "keys": ["LCTRL", "W"], "repeat": true },
+{ "label": "↓",  "keys": ["DOWN"], "repeat": false }
+```
+
+A swipe that starts on a repeating key still scrolls the bar and sends nothing.
+
 Example, a zellij prefix (`Ctrl+B`) and a bare `F5`:
 
 ```json
@@ -55,6 +91,72 @@ Example, a zellij prefix (`Ctrl+B`) and a bare `F5`:
   ]
 }
 ```
+
+## Dictation
+
+A button with `"action": "dictate"` (in the default set as `🎤`) turns speech into typed text,
+fully offline:
+
+1. Tap it: recording starts and the button turns red (`● Rec`).
+2. Tap again (or wait `max_seconds`): recording stops and the button shows `…` while the model runs.
+3. The transcript is typed into the focused window, then the button goes back to `🎤`.
+
+```json
+{
+  "buttons": [{ "label": "🎤", "action": "dictate" }],
+  "dictation": {
+    "record_command": ["parecord", "--channels=1", "--rate=16000", "--format=s16le", "--file-format=wav", "--latency-msec=50", "{wav}"],
+    "transcribe_command": ["whisper-cli", "-m", "{model}", "-f", "{wav}", "-l", "{language}", "-ac", "{audio_ctx}", "-bs", "1", "-bo", "1", "-nt", "-np"],
+    "model": "~/.local/share/kde-keybar/models/ggml-base.en.bin",
+    "language": "en",
+    "output": "type",
+    "paste_keys": ["LCTRL", "V"],
+    "max_seconds": 120
+  }
+}
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `record_command` | `parecord …` | argv that records 16 kHz mono WAV to `{wav}` until it gets SIGINT. `["pw-record", "--rate=16000", "--channels=1", "{wav}"]` also works. |
+| `transcribe_command` | `whisper-cli … -ac {audio_ctx} -bs 1 -bo 1 …` | argv that prints the transcript on stdout. Lines wrapped in `[...]` or `(...)` (like `[BLANK_AUDIO]`) are dropped. |
+| `model` | `~/.local/share/kde-keybar/models/ggml-base.en.bin` | Substituted for `{model}`. `~` is expanded. Get one with `just setup-dictation [name]`. |
+| `language` | `"en"` | Substituted for `{language}`. Use `"auto"` with a multilingual model (no `.en` suffix). |
+| `output` | `"type"` | `"type"` uses `ydotool type` (US layout, ASCII only). `"paste"` copies with `wl-copy` and sends `paste_keys`, which handles any Unicode. |
+| `paste_keys` | `["LCTRL", "V"]` | Chord used by `output: "paste"`. Use `["LCTRL", "LSHIFT", "V"]` for terminals. |
+| `max_seconds` | `120` | Auto-stop after this many seconds. `0` disables the limit. |
+
+Placeholders `{wav}`, `{model}`, `{language}`, and `{audio_ctx}` are replaced in every argv entry.
+`{audio_ctx}` is the whisper encoder context sized to the recording (whisper otherwise always
+encodes a full 30 s window, so a 5 s clip costs as much as a 30 s one).
+
+### Making transcription faster
+
+Rough numbers for an 11 s clip on an i7-1185G7 (CPU, power-saving clocks):
+
+| Setup | Time |
+| --- | --- |
+| `base.en`, whisper defaults (30 s window, beam 5) | ~6.5 s |
+| `base.en` + `-ac {audio_ctx}` + greedy (the default command) | ~3.5-4.5 s |
+| `base.en-q5_1` (quantized) + same flags | ~3.5 s |
+| `tiny.en` + same flags | ~1.5 s |
+
+In order of impact:
+
+1. **GPU build.** Install `glslc` and the Vulkan headers and run `REBUILD=1 just setup-dictation`;
+   the encoder then runs on the iGPU/GPU.
+2. **Smaller model.** `just setup-dictation tiny.en` (fastest, a bit less accurate) or
+   `base.en-q5_1` (quantized, same accuracy as `base.en`), then set `dictation.model`.
+3. Keep `-ac {audio_ctx}` and `-bs 1 -bo 1` in `transcribe_command` (already the default). Any open model
+with a CLI works. For example, with [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+through a small wrapper script:
+
+```json
+{ "dictation": { "transcribe_command": ["fw-transcribe", "{wav}"] } }
+```
+
+Run `just doctor` to check the dictation dependencies. Errors (missing model, recorder, or CLI)
+flash briefly on the button and are logged on stderr (`journalctl --user -u kde-keybar`).
 
 ## Theming
 
@@ -89,7 +191,8 @@ All optional; each overrides the chosen theme. Values are CSS color/length strin
 | `button_radius_px` | `8` | Key corner radius (int). |
 | `button_padding_px` | `6` | Key inner padding (int). |
 | `button_hover_bg` | `"#44454c"` | Key background on hover. |
-| `button_active_bg` | `"#5a6cff"` | Key background while pressed. |
+| `button_active_bg` | `"#5a6cff"` | Key background while pressed (and while dictation is transcribing). |
+| `button_recording_bg` | `"#c0392b"` | Dictation button background while recording. |
 | `font_family` | `null` | Font family for labels; `null` uses the default. |
 
 ## Always-on dock

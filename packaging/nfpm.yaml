@@ -21,7 +21,8 @@ description: |
   A row of tappable buttons (Esc, Tab, Ctrl+C, arrows and more) that shows up
   alongside the on-screen keyboard and injects real key chords through ydotool
   (kernel uinput). Handy on touch devices where a terminal needs keys the
-  virtual keyboard does not offer.
+  virtual keyboard does not offer. Includes an optional offline dictation
+  button backed by an open speech model (whisper.cpp).
 
 # Files that are the same for every packager.
 contents:
@@ -47,6 +48,13 @@ overrides:
       - gir1.2-gtk-4.0
       - gir1.2-gtk4-layer-shell-1.0
       - ydotool
+    # Dictation button: parecord records the mic, wl-copy is used by output "paste".
+    # whisper.cpp (whisper-cli) is not packaged with a CLI on most distros, so it
+    # is left to the user (see docs/configuration.md#dictation).
+    recommends:
+      - pulseaudio-utils
+    suggests:
+      - wl-clipboard
     contents:
       - src: kde-keybar
         dst: /usr/bin/kde-keybar
@@ -69,6 +77,10 @@ overrides:
       - gtk4
       - gtk4-layer-shell
       - ydotool
+    recommends:
+      - pulseaudio-utils
+    suggests:
+      - wl-clipboard
     contents:
       - src: kde-keybar
         dst: /usr/bin/kde-keybar

@@ -43,6 +43,7 @@ default:
     row install        "Install to system paths (sudo)"
     row uninstall      "Remove installed files (sudo)"
     row setup-ydotool  "Install ydotool + enable ydotoold.service"
+    row setup-dictation "Build whisper-cli + download a model for the 🎤 button"
     printf '\n'
 
 # ---- Dev -------------------------------------------------------------------
@@ -147,6 +148,13 @@ doctor:
     fi
     [ -S /run/ydotoold.socket ] && ok "/run/ydotoold.socket" || warn "/run/ydotoold.socket missing"
 
+    printf '%sDictation (optional)%s\n' "$d" "$z"
+    command -v parecord >/dev/null 2>&1 && ok "parecord" || warn "parecord missing (pulseaudio-utils)"
+    command -v whisper-cli >/dev/null 2>&1 && ok "whisper-cli" || warn "whisper-cli missing (run: just setup-dictation)"
+    model="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar/models/ggml-base.en.bin"
+    [ -f "$model" ] && ok "default model" || warn "no default model (run: just setup-dictation)"
+    command -v wl-copy >/dev/null 2>&1 && ok "wl-copy" || warn "wl-copy missing (only needed for output \"paste\")"
+
     printf '\n'
     if [ "$miss" = 1 ]; then
         if command -v dnf >/dev/null 2>&1; then
@@ -221,3 +229,57 @@ setup-ydotool:
         echo "  Edit /usr/lib/systemd/system/ydotoold.service so --socket-own=${uid}:${gid},"
         echo "  then run: sudo systemctl daemon-reload && sudo systemctl restart ydotoold.service"
     fi
+
+# Build whisper-cli from source into ~/.local/bin and download a model (base.en ~140 MB; also tiny.en, small.en, ...).
+setup-dictation MODEL="base.en" WHISPER_VERSION="v1.7.6":
+    #!/usr/bin/env sh
+    set -eu
+    bindir="$HOME/.local/bin"
+    if command -v whisper-cli >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+        echo "whisper-cli already installed: $(command -v whisper-cli) (REBUILD=1 to rebuild)"
+    else
+        for t in git cmake make g++; do
+            command -v "$t" >/dev/null 2>&1 || { echo "Missing $t (Fedora: sudo dnf install git cmake make gcc-c++)"; exit 1; }
+        done
+        src="${XDG_CACHE_HOME:-$HOME/.cache}/kde-keybar/whisper.cpp"
+        if [ -d "$src/.git" ]; then
+            git -C "$src" fetch --depth 1 origin tag {{WHISPER_VERSION}}
+            git -C "$src" checkout -q {{WHISPER_VERSION}}
+        else
+            mkdir -p "$(dirname "$src")"
+            git clone --depth 1 --branch {{WHISPER_VERSION}} https://github.com/ggml-org/whisper.cpp "$src"
+        fi
+        # Vulkan runs the encoder on the GPU (Intel/AMD/NVIDIA), several times faster
+        # than CPU on laptops. Needs glslc + Vulkan headers; falls back to CPU otherwise.
+        gpu=OFF
+        if command -v glslc >/dev/null 2>&1 && [ -f /usr/include/vulkan/vulkan.h ]; then
+            gpu=ON
+        else
+            echo "Note: building CPU-only. For a GPU build: sudo dnf install glslc vulkan-headers vulkan-loader-devel"
+            echo "      (Debian/Ubuntu: glslc libvulkan-dev), then: REBUILD=1 just setup-dictation"
+        fi
+        echo "Building whisper.cpp {{WHISPER_VERSION}} (static, Vulkan=$gpu) ..."
+        rm -rf "$src/build"
+        cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_VULKAN=$gpu >/dev/null
+        cmake --build "$src/build" --target whisper-cli -j "$(nproc)"
+        install -Dm0755 "$src/build/bin/whisper-cli" "$bindir/whisper-cli"
+        echo "Installed: $bindir/whisper-cli"
+        case ":$PATH:" in *":$bindir:"*) ;; *) echo "Note: $bindir is not on PATH; set dictation.transcribe_command to the full path." ;; esac
+    fi
+    dir="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar/models"
+    file="$dir/ggml-{{MODEL}}.bin"
+    mkdir -p "$dir"
+    if [ -f "$file" ]; then
+        echo "Model already present: $file"
+    else
+        echo "Downloading ggml-{{MODEL}}.bin ..."
+        curl -fL --progress-bar -o "$file.part" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{{MODEL}}.bin"
+        mv "$file.part" "$file"
+        echo "Saved: $file"
+    fi
+    if [ "{{MODEL}}" != "base.en" ]; then
+        echo "Point the config at it: \"dictation\": { \"model\": \"$file\" }"
+    fi
+    command -v parecord >/dev/null 2>&1 || echo "Missing parecord: install pulseaudio-utils."

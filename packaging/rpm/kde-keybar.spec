@@ -14,13 +14,17 @@ Requires:       python3-gobject
 Requires:       gtk4
 Requires:       gtk4-layer-shell
 Requires:       ydotool
+# Dictation button: parecord records the mic, wl-copy backs output "paste".
+Recommends:     pulseaudio-utils
+Suggests:       wl-clipboard
 
 %description
 A row of tappable buttons (Esc, Tab, Ctrl+C, arrows and more) that shows up
 alongside the on-screen keyboard and injects real key chords through ydotool
-(kernel uinput). It is a single Python 3 executable built on GTK3 and
-gtk-layer-shell, handy on touch devices where a terminal needs keys the
-virtual keyboard does not offer.
+(kernel uinput). It is a single Python 3 executable built on GTK 4 and
+gtk4-layer-shell, handy on touch devices where a terminal needs keys the
+virtual keyboard does not offer. An optional dictation button transcribes
+speech offline with an open model (whisper.cpp) and types the result.
 
 %prep
 %autosetup

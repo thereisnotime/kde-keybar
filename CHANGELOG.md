@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- One-shot modifier buttons: `{"label": "Ctrl", "modifier": "LCTRL"}` (now in the default
+  set). Tap it and the bar turns into a key grid; the next key you tap is sent as
+  Ctrl+key and the bar switches back. Works for any modifier (`LALT`, `LSUPER`, …).
+  This exists because the on-screen keyboards commit text, so a held Ctrl never
+  combines with letters typed on them.
+
+- Hold to repeat: holding an arrow (or Backspace, Delete, PgUp/PgDn, Space) keeps sending
+  it like a hardware keyboard, instead of firing once on release. Tunable with
+  `repeat_delay_ms` / `repeat_interval_ms`, and any button can opt in or out with
+  `"repeat": true|false`. It follows the button's own pressed state, so a tap still
+  sends once and a swipe that starts on an arrow still scrolls the bar.
+
+- Offline dictation button (`{"action": "dictate"}`, `🎤` in the default set). Tap to
+  record, tap again to transcribe with a local open model and type the result into the
+  focused window. Defaults to `parecord` + whisper.cpp (`whisper-cli`), and both commands
+  are configurable argv templates under the new `dictation` key, so any speech CLI works.
+  The default command sizes whisper's encoder window to the clip (`-ac {audio_ctx}`)
+  and decodes greedily, which roughly halves transcription time; `setup-dictation` builds
+  with Vulkan (GPU) when `glslc` is available. `output: "paste"` goes through `wl-copy` for non-ASCII text. New `just setup-dictation`
+  builds `whisper-cli` from source into `~/.local/bin` and downloads a model, `just doctor` checks the optional deps, and the packages now
+  recommend `pulseaudio-utils` and suggest `wl-clipboard`.
+
 - `data/kde-keybar.service`, a user unit that owns startup and **restarts the bar
   when it dies**. kde-keybar exits non-zero if its Wayland connection drops (a
   compositor crash or restart); previously the XDG autostart entry had no way to
@@ -24,6 +46,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   These are the GUI chords: in a terminal `Copy` sends SIGINT, exactly like the
   existing `^C` button. Swap them for `Ctrl+Shift+C` / `Ctrl+Shift+V` if you mostly
   use the bar over a terminal.
+
+### Changed
+
+- With `overflow: "scroll"` the bar no longer draws a horizontal scrollbar over the keys.
+  It still scrolls by swiping or with the mouse wheel (the scrollbar is hidden in CSS;
+  the scroll policy is unchanged so touch drag-scrolling keeps working).
 
 ## [0.1.0] - 2026-07-10
 
