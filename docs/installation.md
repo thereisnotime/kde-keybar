@@ -111,3 +111,19 @@ vulkan-loader-devel`, then `REBUILD=1 just setup-dictation`.
 Pick another model with `just setup-dictation small.en` (more accurate, slower) or `tiny.en`
 (faster), then set `dictation.model` in the config. See
 [configuration](configuration.md#dictation) for using a different engine.
+
+### Wake word (optional)
+
+To start dictation by voice instead of tapping 🎤, the bar runs a small helper,
+`kde-keybar-wake`, that spots a wake phrase with [Vosk](https://alphacephei.com/vosk/). Vosk is
+not packaged in Fedora, so it goes into a per-user venv rather than the system Python:
+
+```sh
+just setup-wakeword    # venv at ~/.local/share/kde-keybar/wake-venv + vosk-model-small-en-us-0.15 (~40 MB)
+just doctor            # the "Wake word" section should be all green
+```
+
+It uses `uv venv` when `uv` is installed, `python3 -m venv` otherwise, and never touches the
+system site-packages. Running it again is a no-op. The helper itself is installed by
+`just install` and ships in the packages as `/usr/bin/kde-keybar-wake`. Then turn it on in the
+config, see [wake word](configuration.md#wake-word).

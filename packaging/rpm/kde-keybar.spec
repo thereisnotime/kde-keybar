@@ -24,7 +24,9 @@ alongside the on-screen keyboard and injects real key chords through ydotool
 (kernel uinput). It is a single Python 3 executable built on GTK 4 and
 gtk4-layer-shell, handy on touch devices where a terminal needs keys the
 virtual keyboard does not offer. An optional dictation button transcribes
-speech offline with an open model (whisper.cpp) and types the result.
+speech offline with an open model (whisper.cpp) and types the result, and
+can be started hands-free with a wake phrase (kde-keybar-wake, which needs
+Vosk in a user venv; see the docs).
 
 %prep
 %autosetup
@@ -36,6 +38,7 @@ speech offline with an open model (whisper.cpp) and types the result.
 rm -rf %{buildroot}
 
 install -Dpm 0755 kde-keybar %{buildroot}%{_bindir}/kde-keybar
+install -Dpm 0755 kde-keybar-wake %{buildroot}%{_bindir}/kde-keybar-wake
 install -Dpm 0644 data/kde-keybar.desktop %{buildroot}%{_sysconfdir}/xdg/autostart/kde-keybar.desktop
 install -Dpm 0644 data/ydotoold.service %{buildroot}%{_unitdir}/ydotoold.service
 install -Dpm 0644 data/kde-keybar.service %{buildroot}%{_userunitdir}/kde-keybar.service
@@ -47,6 +50,7 @@ install -Dpm 0644 kwin/kde-keybar-fit/contents/code/main.js %{buildroot}%{_datad
 %files
 %license %{_licensedir}/%{name}/LICENSE
 %{_bindir}/kde-keybar
+%{_bindir}/kde-keybar-wake
 %config(noreplace) %{_sysconfdir}/xdg/autostart/kde-keybar.desktop
 %{_unitdir}/ydotoold.service
 %{_userunitdir}/kde-keybar.service

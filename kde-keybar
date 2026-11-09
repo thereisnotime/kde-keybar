@@ -419,6 +419,15 @@ DEFAULT_CONFIG = {
         # Peak sample level (of 32767) below which audio counts as silence. Raise it in a
         # noisy room if auto-stop never fires; lower it if it cuts you off mid-sentence.
         "silence_level": 300,
+        # Hands-free start: a small helper (kde-keybar-wake, Vosk in its own venv) listens
+        # for the phrase and starts a dictation, which then stops on silence as usual.
+        # The microphone stays open while this is enabled. Set up with: just setup-wakeword
+        "wake_word": {
+            "enabled": False,
+            "phrase": "start dictation",
+            "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
+            "python": "~/.local/share/kde-keybar/wake-venv/bin/python",
+        },
     },
 }
 
@@ -483,6 +492,27 @@ class Dictation:
         self.timer = None
         self.watch = None  # silence auto-stop poller
         self.buttons = []  # (button, idle_label)
+        self.woken = False  # this recording was started by the wake word
+        self.wake = None  # WakeWord listener, when dictation.wake_word.enabled
+
+    def listen(self):
+        """Start the wake-word listener if it's enabled. Called once the window that
+        owns this instance is live, so a failed rebuild never leaves a helper behind."""
+        user = self.dc.get("wake_word")
+        ww = {
+            **DEFAULT_CONFIG["dictation"]["wake_word"],
+            **(user if isinstance(user, dict) else {}),
+        }
+        if ww.get("enabled") is True and self.wake is None:
+            self.wake = WakeWord(self, ww)
+            self.wake.start()
+
+    def wake_heard(self):
+        # Only an idle bar reacts: the phrase said mid-dictation is just dictation.
+        if self.state != self.IDLE:
+            return
+        print("kde-keybar: dictation: wake word heard", file=sys.stderr)
+        self.start(woken=True)
 
     def attach(self, button):
         self.buttons.append((button, button.get_label()))
@@ -535,7 +565,7 @@ class Dictation:
             self.stop()
         # taps while transcribing are ignored
 
-    def start(self):
+    def start(self, woken=False):
         model = os.path.expanduser(str(self.dc.get("model", "")))
         if "{model}" in " ".join(map(str, self.dc["transcribe_command"])) and not os.path.isfile(
             model
@@ -556,15 +586,19 @@ class Dictation:
             print(f"  record_command failed: {e.message}", file=sys.stderr)
             return
         self.state = self.RECORDING
+        self.woken = woken
         self._show("● Rec", "dictating")
         max_s = _int(self.dc.get("max_seconds", 120), 120)
         if max_s > 0:
             self.timer = GLib.timeout_add_seconds(max_s, self._timeout)
-        if self.silence_stop() > 0:
-            self.read_pos, self.heard, self.quiet = None, False, 0.0
+        if self.silence_stop() > 0 or woken:
+            self.read_pos, self.heard, self.quiet, self.listened = None, False, 0.0, 0.0
             self.watch = GLib.timeout_add(self.WATCH_MS, self._watch)
 
     WATCH_MS = 150
+    # A wake-word recording that hears nothing for this long was a false alarm (or you
+    # changed your mind): drop it instead of recording until max_seconds.
+    WAKE_LISTEN_S = 5.0
     RATE = 16000  # what the default record_command writes; auto-stop assumes it
 
     def silence_stop(self):
@@ -613,9 +647,15 @@ class Dictation:
                 self.heard, self.quiet = True, 0.0
             elif self.heard:
                 self.quiet += len(chunk) / self.RATE
-        if self.heard and self.quiet >= self.silence_stop():
+        self.listened += len(samples) / self.RATE
+        if self.heard and 0 < self.silence_stop() <= self.quiet:
             self.watch = None
             self.stop()
+            return False
+        if self.woken and not self.heard and self.listened >= self.WAKE_LISTEN_S:
+            self.watch = None
+            self._abort()
+            self._flash("no speech")
             return False
         return True
 
@@ -747,7 +787,14 @@ class Dictation:
             self.wav = None
 
     def cancel(self):
-        """Drop any in-flight recording (used when the window is rebuilt)."""
+        """Drop any in-flight recording and stop the wake-word listener (used when the
+        window is rebuilt and on exit)."""
+        if self.wake:
+            self.wake.stop()
+            self.wake = None
+        self._abort()
+
+    def _abort(self):
         if self.timer:
             GLib.source_remove(self.timer)
             self.timer = None
@@ -756,7 +803,118 @@ class Dictation:
             self.rec.force_exit()
             self.rec = None
         self.state = self.IDLE
+        self.woken = False
         self._cleanup()
+
+
+class WakeWord:
+    """Runs kde-keybar-wake (Vosk, in its own venv) and starts a dictation on each "wake"
+    line it prints. Its stdout is read asynchronously on the GLib main loop. A helper
+    that dies is restarted with backoff; a setup problem (no venv, model, or helper)
+    is reported once and not retried until the next config reload."""
+
+    SETUP_ERROR = 3  # kde-keybar-wake's exit status for "retrying won't help"
+    MAX_BACKOFF_S = 60
+
+    def __init__(self, dictation, ww):
+        self.dictation = dictation
+        self.ww = ww
+        self.proc = None
+        self.cancellable = None
+        self.retry = None
+        self.backoff = 1
+        self.started = 0
+        self.stopped = False
+
+    @staticmethod
+    def helper_path():
+        # Installed side by side (/usr/bin/kde-keybar-wake), or next to the checkout.
+        here = os.path.dirname(os.path.realpath(__file__))
+        return os.path.join(here, "kde-keybar-wake")
+
+    def argv(self):
+        return [
+            os.path.expanduser(str(self.ww.get("python") or "")),
+            self.helper_path(),
+            "--phrase",
+            str(self.ww.get("phrase") or ""),
+            "--model",
+            os.path.expanduser(str(self.ww.get("model") or "")),
+        ]
+
+    def _setup_error(self, why):
+        self.dictation._flash("no wake")
+        print(f"kde-keybar: wake word: {why}", file=sys.stderr)
+
+    def start(self):
+        if self.stopped:
+            return False
+        self.retry = None
+        argv = self.argv()
+        if not os.access(argv[0], os.X_OK):
+            self._setup_error(f"no Python at {argv[0]} (run: just setup-wakeword)")
+            return False
+        if not os.path.isfile(self.helper_path()):
+            self._setup_error(f"helper not found at {self.helper_path()}")
+            return False
+        try:
+            self.proc = Gio.Subprocess.new(argv, Gio.SubprocessFlags.STDOUT_PIPE)
+        except GLib.Error as e:
+            self._setup_error(f"could not start the helper: {e.message}")
+            return False
+        self.started = GLib.get_monotonic_time()
+        self.cancellable = Gio.Cancellable()
+        stream = Gio.DataInputStream.new(self.proc.get_stdout_pipe())
+        self._read(stream)
+        self.proc.wait_async(self.cancellable, self._exited)
+        return False
+
+    def _read(self, stream):
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, self.cancellable, self._line)
+
+    def _line(self, stream, res):
+        try:
+            line, _n = stream.read_line_finish_utf8(res)
+        except GLib.Error:
+            return  # cancelled, or the pipe broke; _exited handles the restart
+        if line is None:
+            return  # EOF
+        if line.strip() == "wake" and not self.stopped:
+            self.dictation.wake_heard()
+        self._read(stream)
+
+    def _exited(self, proc, res):
+        try:
+            proc.wait_finish(res)
+        except GLib.Error:
+            return  # cancelled by stop()
+        self.proc = None
+        if self.stopped:
+            return
+        code = proc.get_exit_status() if proc.get_if_exited() else -proc.get_term_sig()
+        if code == self.SETUP_ERROR:
+            self._setup_error("helper gave up (see its message above)")
+            return
+        # A helper that ran for a while before dying gets a fresh backoff.
+        if GLib.get_monotonic_time() - self.started > 60_000_000:
+            self.backoff = 1
+        print(
+            f"kde-keybar: wake word: helper exited ({code}), restarting in {self.backoff} s",
+            file=sys.stderr,
+        )
+        self.retry = GLib.timeout_add_seconds(self.backoff, self.start)
+        self.backoff = min(self.backoff * 2, self.MAX_BACKOFF_S)
+
+    def stop(self):
+        self.stopped = True
+        if self.retry:
+            GLib.source_remove(self.retry)
+            self.retry = None
+        if self.cancellable:
+            self.cancellable.cancel()
+        if self.proc:
+            self.proc.send_signal(signal.SIGTERM)
+            self.proc = None
 
 
 def _int(v, default):
@@ -1204,6 +1362,26 @@ def validate_config_data(cfg):
             sl = dc.get("silence_level", 300)
             if isinstance(sl, bool) or not isinstance(sl, int) or not 0 <= sl <= 32767:
                 errs.append("dictation.silence_level must be an integer 0-32767")
+            ww = dc.get("wake_word")
+            if ww is not None and not isinstance(ww, dict):
+                errs.append("dictation.wake_word must be an object")
+            elif ww is not None:
+                for k in ww:
+                    if k not in DEFAULT_CONFIG["dictation"]["wake_word"]:
+                        warns.append(f"dictation.wake_word: unknown key '{k}'")
+                if "enabled" in ww and not isinstance(ww["enabled"], bool):
+                    errs.append("dictation.wake_word.enabled must be true or false")
+                ph = ww.get("phrase", "x")
+                if not isinstance(ph, str) or not ph.strip():
+                    errs.append("dictation.wake_word.phrase must be a non-empty string")
+                elif len(ph.split()) == 1:
+                    warns.append(
+                        "dictation.wake_word.phrase: a single word fires on a lot of ordinary "
+                        "speech; two words work much better"
+                    )
+                for k in ("model", "python"):
+                    if k in ww and (not isinstance(ww[k], str) or not ww[k].strip()):
+                        errs.append(f"dictation.wake_word.{k} must be a non-empty path")
     return errs, warns
 
 
@@ -1414,6 +1592,15 @@ DICTATION_FIELDS = [
      "type": "argv", "label": "Record command", "help": "{wav} is the output file."},
     {"key": "dictation.transcribe_command", "type": "argv", "label": "Transcribe command",
      "help": "Placeholders: {wav} {model} {language} {audio_ctx}."},
+    {"section": "Wake word", "key": "dictation.wake_word.enabled", "type": "bool",
+     "label": "Listen for the wake phrase",
+     "help": "Keeps the microphone open. Set up once with: just setup-wakeword"},
+    {"key": "dictation.wake_word.phrase", "type": "text", "label": "Phrase",
+     "help": "Two or more words you wouldn't say in passing; one word false-triggers."},
+    {"key": "dictation.wake_word.model", "type": "path", "folder": True,
+     "label": "Vosk model folder"},
+    {"key": "dictation.wake_word.python", "type": "path", "label": "Python with vosk",
+     "help": "The venv interpreter made by just setup-wakeword."},
 ]  # fmt: skip
 
 MODIFIER_NAMES = ["LCTRL", "RCTRL", "LALT", "RALT", "LSHIFT", "RSHIFT", "LSUPER", "RSUPER"]
@@ -1680,7 +1867,10 @@ class SettingsWindow:
             ctl.append(entry)
             if hasattr(Gtk, "FileDialog"):
                 browse = Gtk.Button(label="Browse…")
-                browse.connect("clicked", lambda _b: self._choose_file(entry))
+                browse.connect(
+                    "clicked",
+                    lambda _b: self._choose_file(entry, spec["label"], spec.get("folder", False)),
+                )
                 ctl.append(browse)
         elif kind == "keys":
             ctl = chord_editor(value or [], commit)
@@ -1744,8 +1934,9 @@ class SettingsWindow:
         box.append(spin)
         return box
 
-    def _choose_file(self, entry):
-        dlg = Gtk.FileDialog(title="Choose a model file")
+    def _choose_file(self, entry, title="Choose a file", folder=False):
+        """File (or, with folder=True, directory) picker that writes ~/-relative paths."""
+        dlg = Gtk.FileDialog(title=title)
         cur = os.path.expanduser(entry.get_text())
         if os.path.exists(cur):
             dlg.set_initial_file(Gio.File.new_for_path(cur))
@@ -1754,7 +1945,7 @@ class SettingsWindow:
 
         def done(d, res):
             try:
-                f = d.open_finish(res)
+                f = d.select_folder_finish(res) if folder else d.open_finish(res)
             except GLib.Error:
                 return  # cancelled
             p = f.get_path() if f else None
@@ -1762,7 +1953,10 @@ class SettingsWindow:
                 home = os.path.expanduser("~")
                 entry.set_text("~" + p[len(home) :] if p.startswith(home + os.sep) else p)
 
-        dlg.open(self.win, None, done)
+        if folder:
+            dlg.select_folder(self.win, None, done)
+        else:
+            dlg.open(self.win, None, done)
 
     # -- Buttons --
 
@@ -2092,6 +2286,7 @@ def main(argv=None):
         if state.get("dictation"):
             state["dictation"].cancel()
         state["dictation"] = dictation
+        dictation.listen()
         state["win"] = win
         state["cfg"] = cfg
         state["always"] = bool(cfg.get("visibility") == "always" or os.environ.get("KEYBAR_ALWAYS"))

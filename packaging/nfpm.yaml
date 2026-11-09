@@ -30,6 +30,10 @@ contents:
     dst: /usr/bin/kde-keybar
     file_info:
       mode: 0755
+  - src: kde-keybar-wake
+    dst: /usr/bin/kde-keybar-wake
+    file_info:
+      mode: 0755
   - src: data/kde-keybar.desktop
     dst: /etc/xdg/autostart/kde-keybar.desktop
   - src: data/ydotoold.service
@@ -54,7 +58,8 @@ overrides:
       - ydotool
     # Dictation button: parecord records the mic, wl-copy is used by output "paste".
     # whisper.cpp (whisper-cli) is not packaged with a CLI on most distros, so it
-    # is left to the user (see docs/configuration.md#dictation).
+    # is left to the user (see docs/configuration.md#dictation). The same goes for
+    # Vosk, which kde-keybar-wake (the wake word) runs from a per-user venv.
     recommends:
       - pulseaudio-utils
     suggests:
@@ -62,6 +67,10 @@ overrides:
     contents:
       - src: kde-keybar
         dst: /usr/bin/kde-keybar
+        file_info:
+          mode: 0755
+      - src: kde-keybar-wake
+        dst: /usr/bin/kde-keybar-wake
         file_info:
           mode: 0755
       - src: data/kde-keybar.desktop
@@ -88,6 +97,10 @@ overrides:
     contents:
       - src: kde-keybar
         dst: /usr/bin/kde-keybar
+        file_info:
+          mode: 0755
+      - src: kde-keybar-wake
+        dst: /usr/bin/kde-keybar-wake
         file_info:
           mode: 0755
       - src: data/kde-keybar.desktop

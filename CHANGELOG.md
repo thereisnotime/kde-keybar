@@ -17,6 +17,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The bar reloads right after a save; standalone `--settings` only signals running bars
   when it saved the default config.
 
+- Wake word for dictation: say a phrase ("start dictation" by default) and dictation starts as
+  if you had tapped 🎤, then stops on silence as usual. A new helper, `kde-keybar-wake`, spots
+  the phrase with Vosk restricted to a one-phrase grammar and prints `wake`; the bar runs it as
+  a subprocess and reads it without blocking, restarts it with backoff if it dies, and stops it
+  on reload and exit. Off by default (`dictation.wake_word.enabled`), since it keeps the mic
+  open. Vosk isn't packaged on Fedora, so `just setup-wakeword` puts it in a per-user venv and
+  downloads `vosk-model-small-en-us-0.15`. The helper is installed by `just install` and ships
+  in both packages; `just doctor` checks the venv and model. A wake-started recording that hears
+  nothing for 5 s is dropped.
+
 - KWin script `kde-keybar-fit`: keeps the active window above the bar while it sits on top
   of the on-screen keyboard, so the bar no longer covers the bottom of the window (KWin only
   makes room for the keyboard itself). Installed and enabled by `just install`, shipped in
