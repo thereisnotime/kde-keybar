@@ -6,10 +6,11 @@ kde-keybar starts this helper when dictation.wake_word.enabled is true and begin
 dictation on every "wake" line. It runs with the interpreter of a venv that has Vosk
 (`just setup-wakeword`), so the bar itself never imports Vosk.
 
-The recognizer gets a grammar of only [phrase, "[unk]"]: everything that isn't the phrase
-collapses into [unk], which keeps decoding cheap and makes the phrase the only thing it
-can report. That also means everything gets forced towards the phrase, so a single word
-fires on lots of ordinary speech; two-word phrases hold up far better. Hits are taken from
+The recognizer gets a small grammar: the phrase, each of its words on its own, a few
+hundred common English words (DECOYS), and "[unk]". With only [phrase, "[unk]"] every
+utterance gets forced towards the phrase, so "start" alone or "start the car" decode as
+"start dictation" and fire. The decoys give that speech somewhere else to go, at roughly
+twice the CPU of the bare grammar (--no-decoys turns them off). Hits are taken from
 partial results for low latency, but only once the phrase has stayed in the partial for
 STABLE_CHUNKS in a row (a final result counts at once): early partials flicker, and that
 alone removes a good share of false hits. After a hit the recognizer is reset and further
@@ -27,9 +28,46 @@ import sys
 
 RATE = 16000
 CHUNK = RATE // 10 * 2  # 100 ms of s16le mono
+# Common words the decoder can pick instead of the phrase (see the module docstring).
+DECOYS = """
+    a i an as at be by do go he if in is it me my no of oh on or so to up us we act add
+    ago air all and any are ask big box boy but can car cry cut day did dog dry eat end
+    eye far few fly for get got had has her him his hot how lay let low man map may men
+    new now off old one our out own put ran red run saw say sea see set she six sun ten
+    the too top try two use war was way who why yes you able also area back base been
+    best bird blue boat body book both busy call came care city cold come dark deep does
+    done door down draw each ease east even ever face fact fall farm fast feel feet fill
+    find fine fire fish five food foot form four free from full game gave girl give gold
+    good grow half hand hard have head hear heat help here high hold home hour idea inch
+    just keep kind king knew know land last late lead left less life like line list live
+    long look love made main make many mark mean mile mind miss moon more most move much
+    must name near need next note noun once only open over page part pass plan play port
+    pose pull rain read real rest road rock room rule said same seem self ship show side
+    sing slow snow some song soon star stay step stop such sure tail take talk tell test
+    than that them then they this time tire told took town tree true turn unit verb very
+    wait walk want warm week well went were west what when will wind with wood word work
+    year your about above after again among began begin black bring build carry cause
+    check class clear close color could cover cross drive early earth every field final
+    first force found front great green group heard horse house large laugh learn leave
+    light might money music never night north ocean often order other paint paper piece
+    place plain plane plant point pound power press quick reach ready right river round
+    serve shape short since small sound south space spell stand start state stead still
+    stood story study table teach their there these thing think those three under until
+    usual voice vowel watch water wheel where which while white whole world would write
+    young always animal answer appear beauty before behind better center change common
+    course decide differ direct during enough equate family father figure follow friend
+    govern ground happen island letter listen little minute mother notice number object
+    people person record school second should simple street strong system though toward
+    travel wonder against between brought certain contain correct country develop
+    distant example hundred machine measure morning nothing numeral pattern picture
+    problem produce product science several special surface thought through children
+    complete interest language mountain multiply possible question remember sentence
+    thousand together
+""".split()
+
 DEBOUNCE_S = 1.5  # one utterance of the phrase never fires twice
 STABLE_CHUNKS = 4  # partial results in a row (100 ms each) that must contain the phrase
-DEFAULT_PHRASE = "start dictation"
+DEFAULT_PHRASE = "hey scribe"
 SETUP_ERROR = 3
 DEFAULT_MODEL = "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15"
 RECORDERS = (
@@ -79,6 +117,11 @@ def main(argv=None):
     ap.add_argument(
         "--stdin", action="store_true", help="read raw s16le 16 kHz mono from stdin (for tests)"
     )
+    ap.add_argument(
+        "--no-decoys",
+        action="store_true",
+        help="grammar of only the phrase + [unk]: cheaper, but far more false wakes",
+    )
     args = ap.parse_args(argv)
 
     phrase = " ".join(args.phrase.lower().split())
@@ -102,7 +145,12 @@ def main(argv=None):
     unknown = [w for w in phrase.split() if model.vosk_model_find_word(w) < 0]
     if unknown:
         fail(f"not in the model's vocabulary: {', '.join(unknown)}; pick other words")
-    rec = vosk.KaldiRecognizer(model, RATE, json.dumps([phrase, "[unk]"]))
+    grammar = [phrase, "[unk]"]
+    if not args.no_decoys:
+        # Vosk drops (and complains about) words it doesn't know, so filter first.
+        extra = dict.fromkeys(phrase.split() + DECOYS)
+        grammar += [w for w in extra if model.vosk_model_find_word(w) >= 0]
+    rec = vosk.KaldiRecognizer(model, RATE, json.dumps(grammar))
     target = phrase.split()
 
     proc = None
@@ -114,9 +162,12 @@ def main(argv=None):
     parent = os.getppid()
 
     def bye(*_):
+        # Exit right away: there is nothing to flush, and a normal interpreter shutdown
+        # runs Vosk's deallocators, where a second SIGTERM (the bar and systemd both send
+        # one on stop) lands and prints "Exception ignored" tracebacks.
         if proc:
             proc.terminate()
-        sys.exit(0)
+        os._exit(0)
 
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)

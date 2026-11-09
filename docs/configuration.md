@@ -174,7 +174,7 @@ a ~40 MB English model, see [installation](installation.md#wake-word-optional)),
   "dictation": {
     "wake_word": {
       "enabled": true,
-      "phrase": "start dictation",
+      "phrase": "hey scribe",
       "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
       "python": "~/.local/share/kde-keybar/wake-venv/bin/python"
     }
@@ -185,7 +185,7 @@ a ~40 MB English model, see [installation](installation.md#wake-word-optional)),
 | Key | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Start the listener. Off by default because it keeps the microphone open. |
-| `phrase` | `"start dictation"` | Word or phrase to listen for. Every word must be in the model's vocabulary; the helper says so on stderr if one isn't. |
+| `phrase` | `"hey scribe"` | Word or phrase to listen for. Every word must be in the model's vocabulary; the helper says so on stderr if one isn't. |
 | `model` | `~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15` | Vosk model directory. Any [Vosk model](https://alphacephei.com/vosk/models) works; the small ones are plenty for a single phrase. |
 | `python` | `~/.local/share/kde-keybar/wake-venv/bin/python` | Interpreter that has `vosk` installed. |
 
@@ -202,18 +202,31 @@ How it behaves:
   but the recorder needs a moment to start, and words spoken before that are lost. If the bar is
   visible, the button turning red is your cue.
 
-**Choosing a phrase.** The helper restricts Vosk to just the phrase plus a catch-all, which makes
-it cheap but also pulls everything said towards the phrase. On ~3 minutes of ordinary synthetic
-(espeak) sentences, the single word `computer` fired 10 times ("compile", "commutes", "computing"
-all count), `hey computer` and `okay computer` twice each, and `start dictation` never. A false
-trigger during conversation would record and type what you say next, so pick two fairly long
-words you would not say in passing; `kde-keybar --validate` warns about one-word phrases.
+**Choosing a phrase.** Vosk is given a small grammar: the phrase, its words on their own, a few
+hundred common English words, and a catch-all. Without those extra words everything said is
+pulled towards the phrase, so "start" alone fired `start dictation`. In synthetic (espeak) tests
+in three voices, every "hey" + name phrase below fired 9/9 times when said and never on partial
+matches ("hey", "hey there", "start the car", the name in an ordinary sentence) or on ~3 minutes
+of everyday sentences:
+
+| Phrase | Fired when said | False wakes (partials) | False wakes (3 min of speech) |
+| --- | --- | --- | --- |
+| `hey scribe` (default) | 9/9 | 0 | 0 |
+| `hey keyboard` | 9/9 | 0 | 0 |
+| `hey jarvis` | 9/9 | 0 | 0 |
+| `hey computer` | 9/9 | 0 | 0 |
+| `start dictation` | 8/9 | 0 | 0 |
+
+Without the extra words (`--no-decoys` on the helper) the same phrases false-woke 3 to 5 times on
+the partials. A false wake records and types what you say next, so pick "hey" plus a word you
+would not otherwise say; `kde-keybar --validate` warns about one-word phrases. Avoid the phrase of
+an assistant you also own ("hey google"), or both will answer.
 
 **Privacy and cost.** While `enabled` is true the microphone is open all the time, as long as the
 bar is running (PipeWire/Plasma show the mic as in use). Audio never leaves the machine and is not
 written to disk; the helper only prints a line when it hears the phrase. On an i7-1185G7 the helper
-used about 5-7% of one core while listening (measured on 30 s of silence and of speech at
-real-time pace), plus ~1.5 s of CPU and ~165 MB of RAM to load the model. It restarts with a
+used about 6% of one core on silence and about 9% during speech (30 s of each at real-time
+pace), plus ~1.5 s of CPU and ~165 MB of RAM to load the model. It restarts with a
 growing delay if it crashes; if the venv or model is missing, `no wake` flashes on 🎤 once and the
 reason is logged, and it tries again on the next config change.
 

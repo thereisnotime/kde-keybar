@@ -424,7 +424,7 @@ DEFAULT_CONFIG = {
         # The microphone stays open while this is enabled. Set up with: just setup-wakeword
         "wake_word": {
             "enabled": False,
-            "phrase": "start dictation",
+            "phrase": "hey scribe",
             "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
             "python": "~/.local/share/kde-keybar/wake-venv/bin/python",
         },
@@ -1371,7 +1371,7 @@ def validate_config_data(cfg):
                         warns.append(f"dictation.wake_word: unknown key '{k}'")
                 if "enabled" in ww and not isinstance(ww["enabled"], bool):
                     errs.append("dictation.wake_word.enabled must be true or false")
-                ph = ww.get("phrase", "x")
+                ph = ww.get("phrase", DEFAULT_CONFIG["dictation"]["wake_word"]["phrase"])
                 if not isinstance(ph, str) or not ph.strip():
                     errs.append("dictation.wake_word.phrase must be a non-empty string")
                 elif len(ph.split()) == 1:

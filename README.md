@@ -35,7 +35,7 @@ You keep using your normal on-screen keyboard for typing, and kde-keybar gives y
 - 15 built-in themes plus full color/transparency overrides.
 - Optional always-on dock mode that reserves space like a panel.
 - Offline dictation button: tap 🎤, talk, tap again, and the text is typed into the focused window. Transcription runs locally with an open model (whisper.cpp by default, any CLI works).
-- Optional wake word: say "start dictation" instead of tapping 🎤 (local Vosk, `just setup-wakeword`).
+- Optional wake word: say "hey scribe" instead of tapping 🎤 (local Vosk, `just setup-wakeword`).
 - Live config reload: edit the JSON, save, the bar updates.
 - Settings window (⚙ on the bar, or `kde-keybar --settings`) to change options and buttons by touch, no JSON needed. Keeps a symlinked config a symlink.
 - Small single-file Python script.

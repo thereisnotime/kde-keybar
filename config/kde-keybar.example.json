@@ -48,7 +48,7 @@
     "silence_level": 300,
     "wake_word": {
       "enabled": false,
-      "phrase": "start dictation",
+      "phrase": "hey scribe",
       "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
       "python": "~/.local/share/kde-keybar/wake-venv/bin/python"
     }

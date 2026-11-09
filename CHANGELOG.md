@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The bar reloads right after a save; standalone `--settings` only signals running bars
   when it saved the default config.
 
-- Wake word for dictation: say a phrase ("start dictation" by default) and dictation starts as
+- Wake word for dictation: say a phrase ("hey scribe" by default) and dictation starts as
   if you had tapped 🎤, then stops on silence as usual. A new helper, `kde-keybar-wake`, spots
   the phrase with Vosk restricted to a one-phrase grammar and prints `wake`; the bar runs it as
   a subprocess and reads it without blocking, restarts it with backoff if it dies, and stops it
@@ -94,6 +94,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "kde-keybar" somewhere in its command line.
 - Dictation: raised whisper's minimum audio context to 768. Smaller contexts misheard
   short clips ("above the" became "a month of").
+- Wake word: saying only part of the phrase (just "start", or "hey there") no longer wakes
+  it. Vosk was given only the phrase and a catch-all, so anything close got forced to the
+  phrase; it now also gets the phrase's words alone and a few hundred common words to pick
+  instead. Default phrase is now "hey scribe".
 - Dictation no longer types `you` when the mic is muted. Whisper makes that up from
   silence, so clips that never rise above `silence_level` are dropped and the button
   shows `mic silent` instead.
