@@ -65,6 +65,7 @@ Full details: **[docs/installation.md](docs/installation.md)**.
 - **[Installation](docs/installation.md)** — requirements, packages, source, ydotool setup.
 - **[Configuration](docs/configuration.md)** — every config key, buttons and key chords, dictation, theming, commands, live reload, dock mode.
 - **[Troubleshooting](docs/troubleshooting.md)** — the bar not appearing, buttons doing nothing, and other common cases.
+- **[Maliit patches](docs/maliit.md)** — optional tweaks to the Maliit on-screen keyboard: hide key, no space long-press, compact size, terminal rows.
 - **[Compatibility](docs/compatibility.md)** — KDE, wlroots, GNOME/X11, and companion keyboards.
 - **[Examples](examples/)** — ready-to-use configs (minimal, dock, transparent, zellij, vim).
 

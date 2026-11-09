@@ -1,0 +1,17 @@
+--- a/qml/keys/SpaceKey.qml
++++ b/qml/keys/SpaceKey.qml
+@@ -53,12 +53,8 @@
+         id: swipeArea
+         anchors.fill: parent
+ 
+-        onPressAndHold: {
+-            fullScreenItem.prevSwipePositionX = mouseX
+-            fullScreenItem.prevSwipePositionY = mouseY
+-            fullScreenItem.cursorSwipe = true
+-            spaceKey.currentlyPressed = false
+-        }
++        // Long-press cursor-swipe mode disabled (local edit, stock copy in SpaceKey.qml.bak-stock).
++        // Holding space now just types a space on release.
+ 
+         onPressed: {
+             Feedback.keyPressed()

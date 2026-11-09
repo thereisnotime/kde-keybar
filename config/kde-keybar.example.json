@@ -42,6 +42,8 @@
     "language": "en",
     "output": "type",
     "paste_keys": ["LCTRL", "V"],
-    "max_seconds": 120
+    "max_seconds": 120,
+    "silence_stop_seconds": 1.5,
+    "silence_level": 300
   }
 }

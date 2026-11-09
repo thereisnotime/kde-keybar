@@ -182,6 +182,14 @@ install:
     systemctl --user stop 'app-kde\x2dkeybar@autostart.service' 2>/dev/null || true
     systemctl --user daemon-reload
     systemctl --user enable --now kde-keybar.service
+    # KWin script that keeps the active window above the bar while it sits on top of
+    # the on-screen keyboard. Per-user install, so no sudo; enabled in kwinrc.
+    if command -v kpackagetool6 >/dev/null 2>&1; then
+        kpackagetool6 --type=KWin/Script --upgrade kwin/kde-keybar-fit >/dev/null 2>&1 \
+            || kpackagetool6 --type=KWin/Script --install kwin/kde-keybar-fit >/dev/null
+        kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled true
+        dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+    fi
     cfg="${XDG_CONFIG_HOME:-$HOME/.config}/kde-keybar.json"
     if [ -e "$cfg" ]; then
         echo "Config already exists, leaving it alone: $cfg"
@@ -200,6 +208,9 @@ uninstall:
     #!/usr/bin/env sh
     set -eu
     systemctl --user disable --now kde-keybar.service 2>/dev/null || true
+    kpackagetool6 --type=KWin/Script --remove kde-keybar-fit >/dev/null 2>&1 || true
+    kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled --delete 2>/dev/null || true
+    dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
     sudo rm -f /usr/bin/kde-keybar
     sudo rm -f /etc/xdg/autostart/kde-keybar.desktop
     sudo rm -f /usr/lib/systemd/system/ydotoold.service
@@ -229,6 +240,47 @@ setup-ydotool:
         echo "  Edit /usr/lib/systemd/system/ydotoold.service so --socket-own=${uid}:${gid},"
         echo "  then run: sudo systemctl daemon-reload && sudo systemctl restart ydotoold.service"
     fi
+
+# Pick patches by prefix, e.g. `just setup-maliit 10 20 30`. Installs a dnf hook (when
+# libdnf5-plugin-actions is present) that re-applies them after maliit-keyboard updates.
+# Patch the Maliit on-screen keyboard (needs sudo; see docs/maliit.md).
+setup-maliit *PATCHES:
+    #!/usr/bin/env sh
+    set -eu
+    src="$PWD/maliit"
+    # sudo needs a terminal; without one (e.g. run from an IDE or agent) use pkexec's
+    # graphical prompt. Everything runs as one root step, so it asks once.
+    if [ -t 0 ]; then asroot=sudo; else asroot=pkexec; fi
+    $asroot sh -c '
+        set -eu
+        src=$1; shift
+        dst=/usr/share/kde-keybar/maliit
+        install -d "$dst/patches/lib" "$dst/patches/share"
+        install -m0755 "$src/apply.sh" "$dst/apply.sh"
+        install -m0644 "$src"/patches/lib/*.patch "$dst/patches/lib/"
+        install -m0644 "$src"/patches/share/*.patch "$dst/patches/share/"
+        "$dst/apply.sh" "$@"
+        hooks=/etc/dnf/libdnf5-plugins/actions.d
+        if [ -d "$hooks" ]; then
+            echo "post_transaction:maliit-keyboard:in::$dst/apply.sh $*" > "$hooks/kde-keybar-maliit.actions"
+            echo "dnf hook installed: patches are re-applied after maliit-keyboard updates."
+        else
+            echo "To re-apply automatically after updates: dnf install libdnf5-plugin-actions,"
+            echo "then run this recipe again."
+        fi
+    ' sh "$src" {{PATCHES}}
+
+# Show which Maliit patches are applied.
+maliit-status:
+    maliit/apply.sh --status
+
+# Undo the Maliit patches and remove the dnf hook (needs sudo).
+revert-maliit:
+    #!/usr/bin/env sh
+    set -eu
+    sudo maliit/apply.sh --revert
+    sudo rm -f /etc/dnf/libdnf5-plugins/actions.d/kde-keybar-maliit.actions
+    sudo rm -rf /usr/share/kde-keybar/maliit
 
 # Build whisper-cli from source into ~/.local/bin and download a model (base.en ~140 MB; also tiny.en, small.en, ...).
 setup-dictation MODEL="base.en" WHISPER_VERSION="v1.7.6":

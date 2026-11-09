@@ -38,6 +38,10 @@ contents:
     dst: /usr/lib/systemd/user/kde-keybar.service
   - src: config/kde-keybar.example.json
     dst: /usr/share/doc/kde-keybar/kde-keybar.example.json
+  - src: kwin/kde-keybar-fit/metadata.json
+    dst: /usr/share/kwin/scripts/kde-keybar-fit/metadata.json
+  - src: kwin/kde-keybar-fit/contents/code/main.js
+    dst: /usr/share/kwin/scripts/kde-keybar-fit/contents/code/main.js
 
 # Dependency names differ between distros, so set them per packager.
 overrides:

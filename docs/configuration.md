@@ -98,7 +98,8 @@ A button with `"action": "dictate"` (in the default set as `🎤`) turns speech 
 fully offline:
 
 1. Tap it: recording starts and the button turns red (`● Rec`).
-2. Tap again (or wait `max_seconds`): recording stops and the button shows `…` while the model runs.
+2. Stop talking: after `silence_stop_seconds` of quiet (1.5 s by default) recording stops by
+   itself. You can also tap again, or it stops at `max_seconds`. Then and the button shows `…` while the model runs.
 3. The transcript is typed into the focused window, then the button goes back to `🎤`.
 
 ```json
@@ -111,7 +112,9 @@ fully offline:
     "language": "en",
     "output": "type",
     "paste_keys": ["LCTRL", "V"],
-    "max_seconds": 120
+    "max_seconds": 120,
+    "silence_stop_seconds": 1.5,
+    "silence_level": 300
   }
 }
 ```
@@ -125,6 +128,8 @@ fully offline:
 | `output` | `"type"` | `"type"` uses `ydotool type` (US layout, ASCII only). `"paste"` copies with `wl-copy` and sends `paste_keys`, which handles any Unicode. |
 | `paste_keys` | `["LCTRL", "V"]` | Chord used by `output: "paste"`. Use `["LCTRL", "LSHIFT", "V"]` for terminals. |
 | `max_seconds` | `120` | Auto-stop after this many seconds. `0` disables the limit. |
+| `silence_stop_seconds` | `1.5` | Stop by itself after this much quiet, counted only once speech has been heard (so it waits while you think of what to say). `0` disables it: tap again to stop. Needs a recorder writing 16 kHz 16-bit mono WAV, like the default. |
+| `silence_level` | `300` | Peak sample level (0 to 32767) below which audio counts as quiet. Used by auto-stop and to skip clips that are entirely silent, like a muted mic, which whisper would otherwise "transcribe" as `you`. Raise it in a noisy room if auto-stop never fires. |
 
 Placeholders `{wav}`, `{model}`, `{language}`, and `{audio_ctx}` are replaced in every argv entry.
 `{audio_ctx}` is the whisper encoder context sized to the recording (whisper otherwise always
@@ -206,6 +211,36 @@ the keyboard), for example a permanent shortcut strip at the top:
 
 `dock: "bar"` (or `true`) reserves the bar's height so maximized windows sit next to it, not under
 it. See [`examples/dock-top.json`](../examples/dock-top.json).
+
+### Keep windows above the bar (KWin script)
+
+KWin moves the active window out of the way of the on-screen keyboard, but it does not know
+about a bar floating on top of the keyboard, so with the default `dock: false` the bar covers
+the bottom of the window. Reserving space with `dock` does not help either: KWin always places
+the keyboard above reserved space, which puts the bar *under* the keyboard.
+
+The bundled KWin script `kde-keybar-fit` fills that gap. While the keyboard and bar are up, it
+trims the active window so it ends at the bar's top edge; when the keyboard hides, KWin restores
+the window. Maximized windows are switched to horizontal-only maximize for that time (KWin
+would otherwise re-apply the full height on every resize and the two would fight) and fully
+re-maximized afterwards. A window that keeps growing back right away (three trims within two seconds) is left alone until the keyboard hides.
+
+`just install` installs and enables it for your user. Packages ship it in
+`/usr/share/kwin/scripts/`; enable it in System Settings, Window Management, KWin Scripts, or:
+
+```sh
+kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled true
+dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure
+```
+
+The script also reports the keyboard's real height to the bar over D-Bus
+(`io.github.thereisnotime.KdeKeybar`, method `SetKeyboardHeight(d)`), so the bar sits flush on
+the keyboard even though Maliit's height changes with its suggestion row and with rotation.
+Without the script the bar falls back to `keyboard_height_fraction`; an explicit `margin_px`
+always wins.
+
+Use it with the default `dock: false`. Set `debug` to `true` in the `[Script-kde-keybar-fit]`
+group of `kwinrc` to log each trim to the journal.
 
 ### Push windows above the keyboard
 

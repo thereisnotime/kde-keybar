@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- KWin script `kde-keybar-fit`: keeps the active window above the bar while it sits on top
+  of the on-screen keyboard, so the bar no longer covers the bottom of the window (KWin only
+  makes room for the keyboard itself). Installed and enabled by `just install`, shipped in
+  the packages under `/usr/share/kwin/scripts/`. It also reports the keyboard's real height
+  to the bar over D-Bus, so the bar sits flush on the keyboard instead of relying on the
+  `keyboard_height_fraction` estimate, and re-maximizes windows KWin left at the shrunk
+  size after the keyboard closed.
+
+- Dictation stops by itself after you stop talking: `dictation.silence_stop_seconds`
+  (default 1.5, `0` turns it off) of quiet, counted only once speech has been heard.
+  `dictation.silence_level` sets what counts as quiet. Tapping again still stops it.
+
 - One-shot modifier buttons: `{"label": "Ctrl", "modifier": "LCTRL"}` (now in the default
   set). Tap it and the bar turns into a key grid; the next key you tap is sent as
   Ctrl+key and the bar switches back. Works for any modifier (`LALT`, `LSUPER`, …).
@@ -46,6 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   These are the GUI chords: in a terminal `Copy` sends SIGINT, exactly like the
   existing `^C` button. Swap them for `Ctrl+Shift+C` / `Ctrl+Shift+V` if you mostly
   use the bar over a terminal.
+
+- Optional Maliit keyboard patches (`maliit/`, `just setup-maliit`): a working hide
+  key, space long-press (cursor swipe) disabled, a more compact keyboard, and digit +
+  symbol rows on the English and phonetic Bulgarian layouts. Idempotent, revertible, and
+  re-applied after `maliit-keyboard` updates through a dnf actions hook.
+
+### Fixed
+
+- The bar re-positions itself when the screen rotates (it kept the old orientation's
+  margin until restarted).
+- `--reload` only signals kde-keybar processes, not every process that has
+  "kde-keybar" somewhere in its command line.
+- Dictation: raised whisper's minimum audio context to 768. Smaller contexts misheard
+  short clips ("above the" became "a month of").
+- Dictation no longer types `you` when the mic is muted. Whisper makes that up from
+  silence, so clips that never rise above `silence_level` are dropped and the button
+  shows `mic silent` instead.
 
 ### Changed
 

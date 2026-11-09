@@ -1,0 +1,13 @@
+--- a/qml/keys/CharKey.qml
++++ b/qml/keys/CharKey.qml
+@@ -283,6 +283,10 @@
+                     extendedKeysSelector.closePopover();
+                 }
+             } else if(!swipedOut) {
++                if (action == "hide") {
++                    Keyboard.hide();
++                    return;
++                }
+                 // Read this prior to altering autocaps
+                 var keyToSend = valueToSubmit;
+                 if (magnifier.currentlyAssignedKey == key) {

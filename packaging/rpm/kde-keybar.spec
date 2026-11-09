@@ -41,6 +41,8 @@ install -Dpm 0644 data/ydotoold.service %{buildroot}%{_unitdir}/ydotoold.service
 install -Dpm 0644 data/kde-keybar.service %{buildroot}%{_userunitdir}/kde-keybar.service
 install -Dpm 0644 config/kde-keybar.example.json %{buildroot}%{_docdir}/%{name}/kde-keybar.example.json
 install -Dpm 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
+install -Dpm 0644 kwin/kde-keybar-fit/metadata.json %{buildroot}%{_datadir}/kwin/scripts/kde-keybar-fit/metadata.json
+install -Dpm 0644 kwin/kde-keybar-fit/contents/code/main.js %{buildroot}%{_datadir}/kwin/scripts/kde-keybar-fit/contents/code/main.js
 
 %files
 %license %{_licensedir}/%{name}/LICENSE
@@ -50,6 +52,7 @@ install -Dpm 0644 LICENSE %{buildroot}%{_licensedir}/%{name}/LICENSE
 %{_userunitdir}/kde-keybar.service
 %dir %{_docdir}/%{name}
 %doc %{_docdir}/%{name}/kde-keybar.example.json
+%{_datadir}/kwin/scripts/kde-keybar-fit/
 
 %changelog
 * Fri Jul 10 2026 thereisnotime <thereisnotime@users.noreply.github.com> - 0.1.0-1
