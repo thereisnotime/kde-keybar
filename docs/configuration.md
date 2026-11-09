@@ -2,7 +2,8 @@
 
 Config lives at `~/.config/kde-keybar.json` (respects `XDG_CONFIG_HOME`). It is written with the
 defaults on first run, and any keys you omit fall back to those defaults. Changes apply live (see
-[live reload](#live-reload)). Ready-made configs are in [`examples/`](../examples/).
+[live reload](#live-reload)). Ready-made configs are in [`examples/`](../examples/). Most of it can
+also be edited without touching JSON in the [settings window](#settings-window).
 
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
@@ -23,7 +24,7 @@ defaults on first run, and any keys you omit fall back to those defaults. Change
 | `repeat_interval_ms` | int | `50` | Time between repeats while held (50 ms = 20 keys/s). |
 | `theme` | string | `"dark"` | Built-in palette (run `kde-keybar --list-themes`). |
 | `style` | object | `{}` | Overrides individual theme keys (see [theming](#theming)). |
-| `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`, `{ "label": "Ctrl", "modifier": "LCTRL" }` for a [one-shot modifier](#one-shot-ctrl--alt), or `{ "label": "🎤", "action": "dictate" }` for the [dictation](#dictation) button. |
+| `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`, `{ "label": "Ctrl", "modifier": "LCTRL" }` for a [one-shot modifier](#one-shot-ctrl--alt), `{ "label": "🎤", "action": "dictate" }` for the [dictation](#dictation) button, or `{ "label": "⚙", "action": "settings" }` to open the [settings window](#settings-window). |
 | `modifier_keys` | array | A–Z, arrows, Tab, ⏎, digits, symbols | Keys offered after tapping a `modifier` button. |
 | `dictation` | object | see [dictation](#dictation) | Recorder, speech model, and output settings for the dictation button. |
 
@@ -163,6 +164,36 @@ through a small wrapper script:
 Run `just doctor` to check the dictation dependencies. Errors (missing model, recorder, or CLI)
 flash briefly on the button and are logged on stderr (`journalctl --user -u kde-keybar`).
 
+## Settings window
+
+Tap **⚙** on the bar (`{ "label": "⚙", "action": "settings" }`, last in the default set) or run
+`kde-keybar --settings` to edit the config in a normal window instead of JSON. Tapping ⚙ again
+while it is open brings the existing window to the front.
+
+- **General**: placement, visibility, layer, dock, monitor, theme, sizes, overflow, margins,
+  keyboard height fractions, hold-to-repeat timing, and the [`style`](#style-keys) overrides
+  (leave a field empty to use the theme's value).
+- **Dictation**: model file, language, output, paste chord, auto-stop, and the record and
+  transcribe commands (one argument per line).
+- **Buttons**: label, kind (key chord, one-shot modifier, or action), the chord itself (picked
+  from the [known key names](#buttons-and-key-chords), so typos are impossible), the grid keys of
+  a modifier button, per-button hold-to-repeat (default, on, off), reorder, add, and delete.
+
+**Apply** saves and keeps the window open, **Save** saves and closes, **Cancel** closes without
+writing. Saving runs the same checks as `--validate`: errors are listed in the window and nothing
+is written, warnings are shown but do not block. If the file on disk is not valid JSON, the
+window says so and refuses to save over it.
+
+The file is rewritten as 2-space-indented JSON. Keys the window does not know about are kept,
+existing keys keep their order, and only the keys you change are added. If the config is a
+symlink (for example into a dotfiles repo), the link is kept: the target file is replaced
+atomically through a temp file in its own directory.
+
+After a save the bar reloads right away. From the ⚙ button the window lives inside the bar, so
+it rebuilds directly. `kde-keybar --settings` on the default config tells running bars to reload
+(like `--reload`); with `-c <other file>` nothing is signalled. `--settings general`,
+`--settings dictation`, or `--settings buttons` opens on that tab.
+
 ## Theming
 
 Pick a built-in `theme`, tweak a theme with a few `style` overrides, or bring your own by setting
@@ -265,13 +296,16 @@ that (or `margin_px`) if the reserved band does not match your keyboard exactly.
 | `kde-keybar --list-themes` | Print the built-in theme names. |
 | `kde-keybar --validate` | Check the config for errors and exit non-zero if any. |
 | `kde-keybar --reload` | Tell running instances to reload their config now. |
+| `kde-keybar --settings [TAB]` | Open only the [settings window](#settings-window), optionally on `general`, `dictation`, or `buttons`. Combine with `-c` to edit another file. |
 | `kde-keybar -c <path>` | Use a config file other than the default. |
 | `kde-keybar --version` | Print the version. |
 
 ## Live reload
 
 kde-keybar watches its config file and reloads on save, so editing `~/.config/kde-keybar.json`
-(theme, buttons, style, ...) updates the running bar with no restart. You can also force it with
+(theme, buttons, style, ...) updates the running bar with no restart. If the config is a symlink,
+the directory of its target is watched too, so editing the file in your dotfiles repo also
+reloads. You can also force it with
 `kde-keybar --reload`. If a save is momentarily invalid, the bar keeps the last good config and
 logs a warning rather than crashing (run `--validate` to see why).
 

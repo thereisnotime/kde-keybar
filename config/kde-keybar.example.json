@@ -33,7 +33,8 @@
     { "label": "↑",       "keys": ["UP"] },
     { "label": "→",       "keys": ["RIGHT"] },
     { "label": "⏎",       "keys": ["ENTER"] },
-    { "label": "🎤",      "action": "dictate" }
+    { "label": "🎤",      "action": "dictate" },
+    { "label": "⚙",       "action": "settings" }
   ],
   "dictation": {
     "record_command": ["parecord", "--channels=1", "--rate=16000", "--format=s16le", "--file-format=wav", "--latency-msec=50", "{wav}"],

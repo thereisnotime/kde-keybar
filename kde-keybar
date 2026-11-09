@@ -15,10 +15,13 @@ A commented default is written on first run. Env overrides: KEYBAR_MARGIN, YDOTO
 """
 
 import argparse
+import contextlib
+import copy
 import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -373,6 +376,7 @@ DEFAULT_CONFIG = {
         {"label": "→", "keys": ["RIGHT"]},
         {"label": "⏎", "keys": ["ENTER"]},
         {"label": "🎤", "action": "dictate"},
+        {"label": "⚙", "action": "settings"},
     ],
     # Speech-to-text for the {"action": "dictate"} button. Runs fully offline: audio is
     # recorded locally and transcribed by an open model (whisper.cpp by default). Both
@@ -803,7 +807,10 @@ def bottom_margin_px(cfg):
         if g is None:
             return 320 + gap
         portrait = g.height > g.width
-        fr = cfg["keyboard_height_fraction"]
+        fr = {
+            **DEFAULT_CONFIG["keyboard_height_fraction"],
+            **(cfg["keyboard_height_fraction"] or {}),
+        }
         frac = fr["portrait"] if portrait else fr["landscape"]
         return int(g.height * frac) + gap
     except Exception:
@@ -860,8 +867,9 @@ def attach_repeat(button, codes, send, cfg):
     button.connect("unrealize", lambda *_: stop())
 
 
-def build_window(cfg, send, dictation=None):
+def build_window(cfg, send, dictation=None, on_settings=None):
     win = Gtk.Window()
+    win.add_css_class("kde-keybar")  # the bar's theme CSS is scoped to this class
     GtkLayerShell.init_for_window(win)
     layers = {
         "background": GtkLayerShell.Layer.BACKGROUND,
@@ -951,6 +959,10 @@ def build_window(cfg, send, dictation=None):
         if spec.get("action") == "dictate" and dictation is not None:
             dictation.attach(b)
             return b
+        if spec.get("action") == "settings":
+            if on_settings is not None:
+                b.connect("clicked", lambda _b: on_settings())
+            return b
         keys = spec.get("keys", [])
         codes = resolve_keys(keys)
         repeat = spec.get("repeat")
@@ -1009,20 +1021,20 @@ def apply_css(cfg, display, state):
     prov = Gtk.CssProvider()
     prov.load_from_string(
         f"""
-        window {{ background: {sv("background", "rgba(20,20,24,0.92)")}; }}
-        button {{ font-size: {_int(cfg.get("font_px", 20), 20)}px; {ff}
+        window.kde-keybar {{ background: {sv("background", "rgba(20,20,24,0.92)")}; }}
+        window.kde-keybar button {{ font-size: {_int(cfg.get("font_px", 20), 20)}px; {ff}
                   padding: {_int(sv("button_padding_px", 6), 6)}px;
                   color: {sv("button_fg", "#eeeeee")};
                   background: {sv("button_bg", "#33343a")};
                   border: {_int(sv("button_border_px", 1), 1)}px solid {sv("button_border", "#4a4b52")};
                   border-radius: {_int(sv("button_radius_px", 8), 8)}px; }}
-        button:hover {{ background: {sv("button_hover_bg", "#44454c")}; }}
-        button:active {{ background: {sv("button_active_bg", "#5a6cff")}; }}
-        button.dictating {{ background: {sv("button_recording_bg", "#c0392b")};
+        window.kde-keybar button:hover {{ background: {sv("button_hover_bg", "#44454c")}; }}
+        window.kde-keybar button:active {{ background: {sv("button_active_bg", "#5a6cff")}; }}
+        window.kde-keybar button.dictating {{ background: {sv("button_recording_bg", "#c0392b")};
                             color: #ffffff; }}
-        scrolledwindow scrollbar {{ opacity: 0; min-height: 0; min-width: 0; }}
-        button.latched {{ background: {sv("button_active_bg", "#5a6cff")}; }}
-        button.transcribing {{ background: {sv("button_active_bg", "#5a6cff")}; }}
+        window.kde-keybar scrolledwindow scrollbar {{ opacity: 0; min-height: 0; min-width: 0; }}
+        window.kde-keybar button.latched {{ background: {sv("button_active_bg", "#5a6cff")}; }}
+        window.kde-keybar button.transcribing {{ background: {sv("button_active_bg", "#5a6cff")}; }}
     """
     )
     if state.get("css"):
@@ -1091,22 +1103,26 @@ STYLE_KEYS = {
     "font_family",
 }
 
-BUTTON_ACTIONS = {"dictate"}
+BUTTON_ACTIONS = {"dictate", "settings"}
 
 
 def validate_config(path):
     """Return (errors, warnings): errors are problems, warnings are advisory."""
-    errs, warns = [], []
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             cfg = json.load(f)
     except FileNotFoundError:
-        warns.append(f"config not found: {path} (built-in defaults will be used)")
-        return errs, warns
+        return [], [f"config not found: {path} (built-in defaults will be used)"]
     except json.JSONDecodeError as e:
-        errs.append(f"invalid JSON: {e}")
-        return errs, warns
+        return [f"invalid JSON: {e}"], []
+    return validate_config_data(cfg)
 
+
+def validate_config_data(cfg):
+    """validate_config for an already parsed config (used by the settings window)."""
+    errs, warns = [], []
+    if not isinstance(cfg, dict):
+        return ["the config must be a JSON object"], warns
     if cfg.get("theme", "dark") not in THEMES:
         errs.append(f"unknown theme '{cfg.get('theme')}'; valid: {', '.join(THEMES)}")
     if cfg.get("position", "bottom") not in ("bottom", "top"):
@@ -1248,6 +1264,754 @@ def reload_running_instances():
     return sent
 
 
+# ---- settings window ------------------------------------------------------------------
+
+_MISSING = object()
+
+
+def cfg_get(cfg, path, default=_MISSING):
+    """Value at a dot path ("dictation.model"), or default if any part is missing."""
+    cur = cfg
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return default
+        cur = cur[part]
+    return cur
+
+
+def cfg_set(cfg, path, value):
+    """Set a dot path, creating intermediate objects. Existing keys keep their position."""
+    *parents, last = path.split(".")
+    cur = cfg
+    for part in parents:
+        if not isinstance(cur.get(part), dict):
+            cur[part] = {}
+        cur = cur[part]
+    cur[last] = value
+
+
+def cfg_del(cfg, path):
+    *parents, last = path.split(".")
+    cur = cfg_get(cfg, ".".join(parents)) if parents else cfg
+    if isinstance(cur, dict):
+        cur.pop(last, None)
+
+
+def save_config(path, data):
+    """Write the config atomically and return the file actually written.
+
+    A symlinked config (e.g. into a dotfiles repo) stays a symlink: the target is resolved
+    and replaced via a temp file in its own directory, the link itself is never touched."""
+    real = os.path.realpath(path)
+    folder = os.path.dirname(real)
+    os.makedirs(folder, exist_ok=True)
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    try:
+        mode = stat.S_IMODE(os.stat(real).st_mode)
+    except FileNotFoundError:
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    fd, tmp = tempfile.mkstemp(prefix=f".{os.path.basename(real)}.", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, mode)
+        os.replace(tmp, real)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+    return real
+
+
+# Rows of the settings window's General and Dictation tabs. One dict per row:
+#   key       dot path into the config, e.g. "dictation.model"
+#   type      choice | bool | int | float | text | path | keys | argv
+#   label     row title          help     one line shown under it
+#   choices   (choice) JSON values; labels: display names in the same order
+#   min, max  (int, float) range; step and digits for float
+#   nullable  (int, float) caption of a checkbox that saves null, e.g. "Auto"
+#   optional  (int, float) caption of a checkbox that removes the key; for text, an empty
+#             entry removes it (falls back to the default / theme)
+#   default   shown when the key is missing; otherwise DEFAULT_CONFIG at the same path
+#   section   heading shown above this row
+# Adding a setting is one dict here (plus its DEFAULT_CONFIG entry and validation).
+GENERAL_FIELDS = [
+    {"section": "Placement", "key": "position", "type": "choice", "label": "Position",
+     "choices": ["bottom", "top"], "labels": ["Bottom, above the keyboard", "Top edge"]},
+    {"key": "visibility", "type": "choice", "label": "Visibility",
+     "choices": ["keyboard", "always"], "labels": ["With the on-screen keyboard", "Always"],
+     "help": "Always keeps the bar on screen and hugs the edge."},
+    {"key": "layer", "type": "choice", "label": "Layer",
+     "choices": ["overlay", "top", "bottom", "background"],
+     "labels": ["Overlay", "Top", "Bottom", "Background"]},
+    {"key": "dock", "type": "choice", "label": "Reserve space",
+     "choices": [False, "bar", "keyboard"], "labels": ["Off", "The bar", "Bar and keyboard"],
+     "help": "Push windows away from the bar, or from the bar and the keyboard below it."},
+    {"key": "monitor", "type": "int", "label": "Monitor", "min": 0, "max": 15,
+     "nullable": "Default", "help": "Output index; Default lets the compositor choose."},
+    {"key": "gap_px", "type": "int", "label": "Gap above keyboard (px)", "min": -2000,
+     "max": 2000, "help": "Positive moves the bar up, negative down."},
+    {"key": "margin_px", "type": "int", "label": "Bottom margin (px)", "min": -2000,
+     "max": 4000, "nullable": "Auto", "help": "Auto follows the on-screen keyboard height."},
+    {"key": "keyboard_height_fraction.portrait", "type": "float",
+     "label": "Keyboard height, portrait", "min": 0, "max": 1, "step": 0.01, "digits": 2,
+     "help": "Fraction of the screen the keyboard covers, when its real height is unknown."},
+    {"key": "keyboard_height_fraction.landscape", "type": "float",
+     "label": "Keyboard height, landscape", "min": 0, "max": 1, "step": 0.01, "digits": 2},
+    {"section": "Look", "key": "theme", "type": "choice", "label": "Theme",
+     "choices": list(THEMES)},
+    {"key": "font_px", "type": "int", "label": "Font size (px)", "min": 6, "max": 96},
+    {"key": "button_height_px", "type": "int", "label": "Button height (px)", "min": 16,
+     "max": 400},
+    {"key": "button_min_width_px", "type": "int", "label": "Minimum button width (px)",
+     "min": 16, "max": 800},
+    {"key": "overflow", "type": "choice", "label": "When buttons do not fit",
+     "choices": ["scroll", "wrap"], "labels": ["Scroll sideways", "Wrap onto more rows"]},
+    {"section": "Hold to repeat", "key": "repeat_delay_ms", "type": "int",
+     "label": "Delay before repeating (ms)", "min": 50, "max": 5000},
+    {"key": "repeat_interval_ms", "type": "int", "label": "Repeat interval (ms)", "min": 15,
+     "max": 1000},
+    {"section": "Style overrides (empty uses the theme)", "key": "style.background",
+     "type": "text", "label": "Background", "optional": True},
+    {"key": "style.button_bg", "type": "text", "label": "Button background", "optional": True},
+    {"key": "style.button_fg", "type": "text", "label": "Button text", "optional": True},
+    {"key": "style.button_border", "type": "text", "label": "Button border", "optional": True},
+    {"key": "style.button_hover_bg", "type": "text", "label": "Hover background",
+     "optional": True},
+    {"key": "style.button_active_bg", "type": "text", "label": "Pressed background",
+     "optional": True},
+    {"key": "style.button_recording_bg", "type": "text", "label": "Recording background",
+     "optional": True},
+    {"key": "style.font_family", "type": "text", "label": "Font family", "optional": True},
+    {"key": "style.button_border_px", "type": "int", "label": "Border width (px)", "min": 0,
+     "max": 20, "default": 1, "optional": "Theme"},
+    {"key": "style.button_radius_px", "type": "int", "label": "Corner radius (px)", "min": 0,
+     "max": 100, "default": 8, "optional": "Theme"},
+    {"key": "style.button_padding_px", "type": "int", "label": "Padding (px)", "min": 0,
+     "max": 60, "default": 6, "optional": "Theme"},
+]  # fmt: skip
+
+DICTATION_FIELDS = [
+    {"section": "Speech model", "key": "dictation.model", "type": "path", "label": "Model file",
+     "help": "Substituted for {model}. ~ is expanded."},
+    {"key": "dictation.language", "type": "text", "label": "Language",
+     "help": "Substituted for {language}. auto needs a multilingual model."},
+    {"section": "Output", "key": "dictation.output", "type": "choice", "label": "Output",
+     "choices": ["type", "paste"], "labels": ["Type it (ASCII only)", "Paste it (any text)"]},
+    {"key": "dictation.paste_keys", "type": "keys", "label": "Paste chord",
+     "help": "Sent after copying when output is Paste. Terminals want LCTRL LSHIFT V."},
+    {"section": "Stopping", "key": "dictation.max_seconds", "type": "int",
+     "label": "Maximum length (s)", "min": 0, "max": 3600, "help": "0 means no limit."},
+    {"key": "dictation.silence_stop_seconds", "type": "float", "label": "Stop after quiet (s)",
+     "min": 0, "max": 60, "step": 0.1, "digits": 1, "help": "0 turns auto-stop off."},
+    {"key": "dictation.silence_level", "type": "int", "label": "Silence level", "min": 0,
+     "max": 32767, "help": "Peak level below which audio counts as quiet."},
+    {"section": "Commands (one argument per line)", "key": "dictation.record_command",
+     "type": "argv", "label": "Record command", "help": "{wav} is the output file."},
+    {"key": "dictation.transcribe_command", "type": "argv", "label": "Transcribe command",
+     "help": "Placeholders: {wav} {model} {language} {audio_ctx}."},
+]  # fmt: skip
+
+MODIFIER_NAMES = ["LCTRL", "RCTRL", "LALT", "RALT", "LSHIFT", "RSHIFT", "LSUPER", "RSUPER"]
+ACTION_LABELS = {"dictate": "Dictation (🎤)", "settings": "Settings (⚙)"}
+SETTINGS_TABS = ("general", "dictation", "buttons")
+
+SETTINGS_CSS = """
+window.kde-keybar-settings button, window.kde-keybar-settings entry,
+window.kde-keybar-settings spinbutton, window.kde-keybar-settings dropdown > button {
+    min-height: 40px; }
+window.kde-keybar-settings switch { min-height: 30px; min-width: 56px; }
+window.kde-keybar-settings notebook > header tab { min-height: 44px; padding: 0 20px; }
+window.kde-keybar-settings .field { padding: 8px 4px; }
+window.kde-keybar-settings .field-title { font-weight: bold; }
+window.kde-keybar-settings .section-title { font-weight: bold; font-size: 1.2em;
+    margin-top: 14px; }
+window.kde-keybar-settings .button-card { padding: 10px; }
+window.kde-keybar-settings .chip.bad, window.kde-keybar-settings .error { color: #e5484d; }
+window.kde-keybar-settings textview { font-family: monospace; }
+"""
+
+
+def _index_of(choices, value):
+    """Index of value in choices, comparing type too (so False never matches 0)."""
+    for i, c in enumerate(choices):
+        if type(c) is type(value) and c == value:
+            return i
+    return -1
+
+
+def _dropdown(labels, selected=0):
+    dd = Gtk.DropDown.new_from_strings([str(x) for x in labels])
+    dd.set_selected(max(0, selected))
+    return dd
+
+
+def _clear(box):
+    while (child := box.get_first_child()) is not None:
+        box.remove(child)
+
+
+def chord_editor(keys, on_change, empty_text="(none)"):
+    """Removable key-name chips plus a picker of KEYCODES names, so unknown names can
+    not be added. Names already in the config that are unknown are shown in red."""
+    keys = [str(k) for k in keys]
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    chips = Gtk.FlowBox()
+    chips.set_selection_mode(Gtk.SelectionMode.NONE)
+    chips.set_max_children_per_line(12)
+    chips.set_column_spacing(6)
+    chips.set_row_spacing(6)
+    names = list(KEYCODES)
+    picker = _dropdown(names)
+    picker.set_enable_search(True)
+    picker.set_expression(Gtk.PropertyExpression.new(Gtk.StringObject, None, "string"))
+    add = Gtk.Button(label="Add key")
+    row = Gtk.Box(spacing=6)
+    row.append(picker)
+    row.append(add)
+
+    def refresh():
+        chips.remove_all()
+        if not keys:
+            chips.append(Gtk.Label(label=empty_text, xalign=0))
+        for i, k in enumerate(keys):
+            chip = Gtk.Button(label=f"{k}  ✕")
+            chip.add_css_class("chip")
+            chip.set_tooltip_text("Remove")
+            if KEYCODES.get(k.upper()) is None:
+                chip.add_css_class("bad")
+            chip.connect("clicked", lambda _b, i=i: GLib.idle_add(remove, i))
+            chips.append(chip)
+
+    def remove(i):  # idle: refresh() destroys the chip that was tapped
+        keys.pop(i)
+        refresh()
+        on_change(list(keys))
+        return False
+
+    def on_add(_b):
+        keys.append(names[picker.get_selected()])
+        refresh()
+        on_change(list(keys))
+
+    add.connect("clicked", on_add)
+    refresh()
+    box.append(chips)
+    box.append(row)
+    return box
+
+
+class SettingsWindow:
+    """GTK4 editor for the config file. Edits a copy of the file as parsed (not merged
+    with defaults), so only keys you touch are written and unknown keys pass through."""
+
+    def __init__(self, path, on_saved=None, on_closed=None, tab="general"):
+        self.path = path
+        self.on_saved = on_saved
+        self.on_closed = on_closed
+        self.load_error = None
+        try:
+            with open(path, encoding="utf-8") as f:
+                self.data = json.load(f)
+            if not isinstance(self.data, dict):
+                raise ValueError("the top level is not a JSON object")
+        except FileNotFoundError:
+            self.data = copy.deepcopy(DEFAULT_CONFIG)
+        except (OSError, ValueError) as e:  # JSONDecodeError is a ValueError
+            self.data = {}
+            self.load_error = f"Can't read {path}: {e}. Fix or remove the file; saving is off."
+        btns = self.data.get("buttons")
+        self.buttons = copy.deepcopy(btns if isinstance(btns, list) else DEFAULT_CONFIG["buttons"])
+        self.buttons_saved = copy.deepcopy(self.buttons)
+
+        _install_settings_css()
+        win = self.win = Gtk.Window(title="kde-keybar settings")
+        win.add_css_class("kde-keybar-settings")
+        g = _monitor_geometry()
+        w, h = (g.width, g.height) if g is not None else (1000, 900)
+        win.set_default_size(min(960, max(360, w - 40)), min(1000, max(400, h - 120)))
+        win.connect("close-request", self._closed)
+
+        self.notebook = Gtk.Notebook()
+        self.notebook.set_vexpand(True)
+        self.notebook.append_page(self._fields_page(GENERAL_FIELDS), Gtk.Label(label="General"))
+        self.notebook.append_page(self._fields_page(DICTATION_FIELDS), Gtk.Label(label="Dictation"))
+        self.notebook.append_page(self._buttons_page(), Gtk.Label(label="Buttons"))
+        if tab in SETTINGS_TABS:
+            self.notebook.set_current_page(SETTINGS_TABS.index(tab))
+
+        self.status = Gtk.Label(xalign=0, wrap=True, selectable=True)
+        status_scroll = Gtk.ScrolledWindow()
+        status_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        status_scroll.set_max_content_height(140)
+        status_scroll.set_propagate_natural_height(True)
+        status_scroll.set_child(self.status)
+        status_scroll.set_hexpand(True)
+
+        actions = Gtk.Box(spacing=8)
+        cancel = Gtk.Button(label="Cancel")
+        self.apply_btn = Gtk.Button(label="Apply")
+        self.save_btn = Gtk.Button(label="Save")
+        self.save_btn.add_css_class("suggested-action")
+        for b in (cancel, self.apply_btn, self.save_btn):
+            b.set_size_request(110, -1)
+            actions.append(b)
+        cancel.connect("clicked", lambda _b: win.close())
+        self.apply_btn.connect("clicked", lambda _b: self.save())
+        self.save_btn.connect("clicked", lambda _b: self.save() and win.close())
+
+        footer = Gtk.Box(spacing=12)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(footer, f"set_margin_{m}")(12)
+        footer.append(status_scroll)
+        actions.set_valign(Gtk.Align.END)
+        footer.append(actions)
+
+        root = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        root.append(self.notebook)
+        root.append(Gtk.Separator())
+        root.append(footer)
+        win.set_child(root)
+
+        if self.load_error:
+            self.apply_btn.set_sensitive(False)
+            self.save_btn.set_sensitive(False)
+            self._show_status([self.load_error], [])
+        else:
+            self._show_status([], [], f"Editing {path}")
+        win.present()
+
+    def present(self):
+        self.win.present()
+
+    def _closed(self, _win):
+        if self.on_closed:
+            self.on_closed()
+        return False
+
+    # -- General / Dictation: one row per field spec --
+
+    def _page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        for m in ("top", "bottom", "start", "end"):
+            getattr(box, f"set_margin_{m}")(16)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_child(box)
+        return scroll, box
+
+    def _fields_page(self, fields):
+        scroll, box = self._page()
+        for spec in fields:
+            if spec.get("section"):
+                head = Gtk.Label(label=spec["section"], xalign=0)
+                head.add_css_class("section-title")
+                box.append(head)
+            box.append(self._field_row(spec))
+        return scroll
+
+    def _field_row(self, spec):
+        key, kind = spec["key"], spec["type"]
+        default = spec["default"] if "default" in spec else cfg_get(DEFAULT_CONFIG, key, None)
+        value = cfg_get(self.data, key, _MISSING)
+        missing = value is _MISSING
+        if missing:
+            value = default
+
+        def commit(v):
+            cfg_set(self.data, key, v)
+
+        def unset():
+            cfg_del(self.data, key)
+
+        wide = kind in ("path", "keys", "argv")
+        row = Gtk.Box(
+            orientation=Gtk.Orientation.VERTICAL if wide else Gtk.Orientation.HORIZONTAL,
+            spacing=8 if wide else 16,
+        )
+        row.add_css_class("field")
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text.set_hexpand(True)
+        title = Gtk.Label(label=spec["label"], xalign=0, wrap=True)
+        title.add_css_class("field-title")
+        text.append(title)
+        if spec.get("help"):
+            hl = Gtk.Label(label=spec["help"], xalign=0, wrap=True)
+            hl.add_css_class("dim-label")
+            text.append(hl)
+        row.append(text)
+
+        if kind == "choice":
+            choices = list(spec["choices"])
+            labels = list(spec.get("labels") or [str(c) for c in choices])
+            idx = _index_of(choices, value)
+            if idx < 0:  # a value the list does not know (e.g. dock: true): keep it selectable
+                choices.append(value)
+                labels.append(f"{json.dumps(value, ensure_ascii=False)} (current)")
+                idx = len(choices) - 1
+            ctl = _dropdown(labels, idx)
+            ctl.set_size_request(300, -1)
+            ctl.connect("notify::selected", lambda d, _p: commit(choices[d.get_selected()]))
+        elif kind == "bool":
+            ctl = Gtk.Switch(active=bool(value))
+            ctl.connect("notify::active", lambda s, _p: commit(s.get_active()))
+        elif kind in ("int", "float"):
+            ctl = self._number(spec, value, missing, commit, unset)
+        elif kind == "text":
+            ctl = Gtk.Entry(text="" if value is None else str(value))
+            ctl.set_size_request(300, -1)
+            if spec.get("optional"):
+                ctl.set_placeholder_text("theme default" if key.startswith("style.") else "default")
+
+            def on_text(e):
+                t = e.get_text()
+                unset() if spec.get("optional") and not t else commit(t)
+
+            ctl.connect("changed", on_text)
+        elif kind == "path":
+            ctl = Gtk.Box(spacing=8)
+            entry = Gtk.Entry(text="" if value is None else str(value))
+            entry.set_hexpand(True)
+            entry.connect("changed", lambda e: commit(e.get_text()))
+            ctl.append(entry)
+            if hasattr(Gtk, "FileDialog"):
+                browse = Gtk.Button(label="Browse…")
+                browse.connect("clicked", lambda _b: self._choose_file(entry))
+                ctl.append(browse)
+        elif kind == "keys":
+            ctl = chord_editor(value or [], commit)
+        elif kind == "argv":
+            tv = Gtk.TextView()
+            tv.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+            tv.get_buffer().set_text("\n".join(str(a) for a in (value or [])))
+            for m in ("top", "bottom", "left", "right"):
+                getattr(tv, f"set_{m}_margin")(8)
+
+            def on_argv(buf):
+                t = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+                commit([ln for ln in t.split("\n") if ln.strip()])
+
+            tv.get_buffer().connect("changed", on_argv)
+            ctl = Gtk.Frame(child=tv)
+            ctl.set_size_request(-1, 150)
+        else:
+            raise ValueError(f"unknown field type {kind!r} for {key}")
+        if not wide:
+            ctl.set_valign(Gtk.Align.CENTER)
+        row.append(ctl)
+        return row
+
+    def _number(self, spec, value, missing, commit, unset):
+        is_int = spec["type"] == "int"
+        lo, hi = spec.get("min", -1_000_000), spec.get("max", 1_000_000)
+        spin = Gtk.SpinButton.new_with_range(lo, hi, spec.get("step", 1))
+        spin.set_digits(0 if is_int else spec.get("digits", 2))
+        spin.set_width_chars(7)
+        ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+        fallback = spec.get("default", lo if lo > 0 else 0)
+        spin.set_value(value if ok else (fallback if isinstance(fallback, (int, float)) else 0))
+
+        def current():
+            v = spin.get_value()
+            return int(round(v)) if is_int else round(v, spec.get("digits", 2))
+
+        caption = spec.get("nullable") or spec.get("optional")
+        if not caption:
+            spin.connect("value-changed", lambda _s: commit(current()))
+            return spin
+        box = Gtk.Box(spacing=12)
+        check = Gtk.CheckButton(label=caption)
+        is_off = (value is None) if spec.get("nullable") else missing
+        check.set_active(is_off)
+        spin.set_sensitive(not is_off)
+
+        def on_check(c):
+            spin.set_sensitive(not c.get_active())
+            if not c.get_active():
+                commit(current())
+            elif spec.get("nullable"):
+                commit(None)
+            else:
+                unset()
+
+        check.connect("toggled", on_check)
+        spin.connect("value-changed", lambda _s: check.get_active() or commit(current()))
+        box.append(check)
+        box.append(spin)
+        return box
+
+    def _choose_file(self, entry):
+        dlg = Gtk.FileDialog(title="Choose a model file")
+        cur = os.path.expanduser(entry.get_text())
+        if os.path.exists(cur):
+            dlg.set_initial_file(Gio.File.new_for_path(cur))
+        elif os.path.isdir(os.path.dirname(cur)):
+            dlg.set_initial_folder(Gio.File.new_for_path(os.path.dirname(cur)))
+
+        def done(d, res):
+            try:
+                f = d.open_finish(res)
+            except GLib.Error:
+                return  # cancelled
+            p = f.get_path() if f else None
+            if p:
+                home = os.path.expanduser("~")
+                entry.set_text("~" + p[len(home) :] if p.startswith(home + os.sep) else p)
+
+        dlg.open(self.win, None, done)
+
+    # -- Buttons --
+
+    def _buttons_page(self):
+        scroll, box = self._page()
+        self.btn_scroll = scroll
+        intro = Gtk.Label(
+            xalign=0,
+            wrap=True,
+            label="Buttons from left to right. Keys are pressed in order and released in "
+            "reverse. Without a Settings (⚙) button this window is only reachable with "
+            "kde-keybar --settings.",
+        )
+        intro.add_css_class("dim-label")
+        box.append(intro)
+        self.btn_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.btn_list.set_margin_top(10)
+        box.append(self.btn_list)
+        add = Gtk.Button(label="Add button")
+        add.set_margin_top(12)
+        add.set_halign(Gtk.Align.START)
+        add.connect("clicked", lambda _b: self._add_button())
+        box.append(add)
+        self._render_buttons()
+        return scroll
+
+    def _render_buttons(self, scroll_to_end=False):
+        adj = self.btn_scroll.get_vadjustment()
+        pos = adj.get_value()
+        _clear(self.btn_list)
+        for i, b in enumerate(self.buttons):
+            self.btn_list.append(self._button_card(i, b))
+
+        def restore():
+            adj.set_value(adj.get_upper() if scroll_to_end else pos)
+            return False
+
+        GLib.idle_add(restore)
+
+    def _later(self, fn, *a):
+        """Run fn after the current signal: re-rendering destroys the emitting widget."""
+        GLib.idle_add(lambda: (fn(*a), self._render_buttons(), False)[2])
+
+    def _add_button(self):
+        self.buttons.append({"label": "Esc", "keys": ["ESC"]})
+        self._render_buttons(scroll_to_end=True)
+
+    def _move(self, i, d):
+        j = i + d
+        if 0 <= j < len(self.buttons):
+            self.buttons[i], self.buttons[j] = self.buttons[j], self.buttons[i]
+
+    def _set_kind(self, i, kind):
+        b = self.buttons[i]
+        keep = {k: v for k, v in b.items() if k not in ("keys", "modifier", "action", "repeat")}
+        nb = {"label": b.get("label", ""), **keep}
+        if kind == "keys":
+            nb["keys"] = []
+        elif kind == "modifier":
+            nb["modifier"] = "LCTRL"
+        else:
+            nb["action"] = "dictate"
+        self.buttons[i] = nb
+
+    def _button_card(self, i, b):
+        card = Gtk.Frame()
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        inner.add_css_class("button-card")
+        card.set_child(inner)
+
+        top = Gtk.Box(spacing=8)
+        num = Gtk.Label(label=f"{i + 1}.")
+        num.set_size_request(32, -1)
+        top.append(num)
+
+        def tool(icon, tip, fn, *a, sensitive=True):
+            btn = Gtk.Button.new_from_icon_name(icon)
+            btn.set_tooltip_text(tip)
+            btn.set_size_request(48, -1)
+            btn.set_sensitive(sensitive)
+            btn.connect("clicked", lambda _b: self._later(fn, *a))
+            return btn
+
+        last = len(self.buttons) - 1
+        if not isinstance(b, dict):
+            bad = Gtk.Label(label=f"Not a button: {json.dumps(b, ensure_ascii=False)}", xalign=0)
+            bad.add_css_class("error")
+            bad.set_hexpand(True)
+            top.append(bad)
+        else:
+            label = Gtk.Entry(text=str(b.get("label", "")), placeholder_text="Label")
+            label.set_hexpand(True)
+            label.connect("changed", lambda e: b.__setitem__("label", e.get_text()))
+            top.append(label)
+            kind = "modifier" if "modifier" in b else "action" if "action" in b else "keys"
+            kinds = ["keys", "modifier", "action"]
+            kdd = _dropdown(["Key chord", "One-shot modifier", "Action"], kinds.index(kind))
+            kdd.connect(
+                "notify::selected",
+                lambda d, _p: self._later(self._set_kind, i, kinds[d.get_selected()]),
+            )
+            top.append(kdd)
+        top.append(tool("go-up-symbolic", "Move left", self._move, i, -1, sensitive=i > 0))
+        top.append(tool("go-down-symbolic", "Move right", self._move, i, 1, sensitive=i < last))
+        top.append(tool("user-trash-symbolic", "Delete", self.buttons.pop, i))
+        inner.append(top)
+        if not isinstance(b, dict):
+            return card
+
+        def labelled(text, widget):
+            row = Gtk.Box(spacing=12)
+            lab = Gtk.Label(label=text, xalign=0)
+            lab.set_size_request(110, -1)
+            lab.set_valign(Gtk.Align.START)
+            lab.set_margin_top(10)
+            row.append(lab)
+            widget.set_hexpand(True)
+            row.append(widget)
+            return row
+
+        def set_or_pop(k, v):
+            if v:
+                b[k] = v
+            else:
+                b.pop(k, None)
+
+        if kind == "keys":
+            inner.append(
+                labelled(
+                    "Keys", chord_editor(b.get("keys") or [], lambda v: b.__setitem__("keys", v))
+                )
+            )
+            rep = b.get("repeat")
+            rdd = _dropdown(["Default", "On", "Off"], 0 if rep is None else 1 if rep else 2)
+            rdd.set_hexpand(False)
+
+            def on_repeat(d, _p):
+                sel = d.get_selected()
+                if sel == 0:
+                    b.pop("repeat", None)
+                else:
+                    b["repeat"] = sel == 1
+
+            rdd.connect("notify::selected", on_repeat)
+            rbox = Gtk.Box()
+            rbox.append(rdd)
+            inner.append(labelled("Hold to repeat", rbox))
+        elif kind == "modifier":
+            mods = list(MODIFIER_NAMES)
+            cur = str(b.get("modifier", "LCTRL"))
+            if cur.upper() not in mods:
+                mods.append(cur)
+            mdd = _dropdown(mods, mods.index(cur.upper() if cur.upper() in mods else cur))
+            mdd.connect(
+                "notify::selected", lambda d, _p: b.__setitem__("modifier", mods[d.get_selected()])
+            )
+            mbox = Gtk.Box()
+            mbox.append(mdd)
+            inner.append(labelled("Modifier", mbox))
+            grid = chord_editor(b.get("keys") or [], lambda v: set_or_pop("keys", v), "(all keys)")
+            inner.append(labelled("Grid keys", grid))
+        else:
+            acts = sorted(BUTTON_ACTIONS)
+            cur = b.get("action")
+            if cur not in acts:
+                acts.append(cur)
+            add = _dropdown([ACTION_LABELS.get(a, str(a)) for a in acts], acts.index(cur))
+            add.connect(
+                "notify::selected", lambda d, _p: b.__setitem__("action", acts[d.get_selected()])
+            )
+            abox = Gtk.Box()
+            abox.append(add)
+            inner.append(labelled("Action", abox))
+        return card
+
+    # -- saving --
+
+    def collect(self):
+        """The config as it would be saved."""
+        data = copy.deepcopy(self.data)
+        if self.buttons != self.buttons_saved:
+            data["buttons"] = copy.deepcopy(self.buttons)
+        return data
+
+    def _show_status(self, errs, warns, note=None, ok=False):
+        def line(color, text):
+            return f'<span foreground="{color}">{GLib.markup_escape_text(text)}</span>'
+
+        lines = [line("#e5484d", f"Error: {e}") for e in errs]
+        lines += [line("#d9822b", f"Warning: {w}") for w in warns]
+        if note:
+            lines.append(line("#30a46c", note) if ok else GLib.markup_escape_text(note))
+        self.status.set_markup("\n".join(lines))
+
+    def save(self):
+        """Validate and write. Returns True when the file was written."""
+        if self.load_error:
+            return False
+        data = self.collect()
+        errs, warns = validate_config_data(data)
+        if errs:
+            self._show_status(errs, warns, "Not saved.")
+            return False
+        try:
+            real = save_config(self.path, data)
+        except OSError as e:
+            self._show_status([f"could not write {self.path}: {e}"], warns)
+            return False
+        self.data = data
+        self.buttons_saved = copy.deepcopy(self.buttons)
+        where = real if real == os.path.abspath(self.path) else f"{real} (via {self.path})"
+        self._show_status([], warns, f"Saved to {where}.", ok=True)
+        if self.on_saved:
+            self.on_saved(real)
+        return True
+
+
+_SETTINGS_CSS_DONE = []
+
+
+def _install_settings_css():
+    disp = Gdk.Display.get_default()
+    if _SETTINGS_CSS_DONE or disp is None:
+        return
+    prov = Gtk.CssProvider()
+    prov.load_from_string(SETTINGS_CSS)
+    Gtk.StyleContext.add_provider_for_display(disp, prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _SETTINGS_CSS_DONE.append(prov)
+
+
+def run_settings(path, tab, loop):
+    """kde-keybar --settings: just the settings window, no bar and no layer surface."""
+    default = os.path.realpath(DEFAULT_CONFIG_PATH)
+
+    def saved(real):
+        # Only poke running bars when this is their config, so editing a test or example
+        # file never reloads the bar you are using.
+        if real == default:
+            n = reload_running_instances()
+            print(f"kde-keybar: saved {real}, reloaded {n} running instance(s)", file=sys.stderr)
+
+    SettingsWindow(path, on_saved=saved, on_closed=loop.quit, tab=tab)
+    # Another settings window saving sends SIGHUP to every kde-keybar; do not die from it.
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGHUP, lambda *a: True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *a: loop.quit() or True)
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *a: loop.quit() or True)
+    loop.run()
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="kde-keybar", description=__doc__.strip().splitlines()[0])
     ap.add_argument("-c", "--config", default=DEFAULT_CONFIG_PATH, help="path to config JSON")
@@ -1257,6 +2021,14 @@ def main(argv=None):
         "--reload",
         action="store_true",
         help="tell running instances to reload their config, then exit",
+    )
+    ap.add_argument(
+        "--settings",
+        nargs="?",
+        const="general",
+        choices=SETTINGS_TABS,
+        metavar="TAB",
+        help="open only the settings window (optionally on general, dictation or buttons)",
     )
     ap.add_argument("-V", "--version", action="version", version=f"kde-keybar {__version__}")
     args = ap.parse_args(argv)
@@ -1285,8 +2057,23 @@ def main(argv=None):
 
     Gtk.init()
     loop = GLib.MainLoop()
+
+    if args.settings:
+        run_settings(args.config, args.settings, loop)
+        return
+
     state = {}
     setup_visibility(state)
+
+    def open_settings():
+        if state.get("settings"):
+            state["settings"].present()
+            return
+        state["settings"] = SettingsWindow(
+            args.config,
+            on_saved=lambda _real: rebuild(),
+            on_closed=lambda: state.pop("settings", None),
+        )
 
     def rebuild(*_):
         win = None
@@ -1294,7 +2081,7 @@ def main(argv=None):
             cfg = load_config(args.config)
             send = make_sender(cfg)
             dictation = Dictation(cfg, send)
-            win = build_window(cfg, send, dictation)
+            win = build_window(cfg, send, dictation, on_settings=open_settings)
             apply_css(cfg, win.get_display(), state)
         except Exception as e:
             print(f"kde-keybar: reload failed, keeping current config ({e})", file=sys.stderr)
@@ -1353,23 +2140,26 @@ def main(argv=None):
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, lambda *a: loop.quit() or True)
     GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, lambda *a: loop.quit() or True)
 
-    # auto-reload when the config file changes (watch the dir to catch editor rename-saves)
-    try:
-        cfgfile = Gio.File.new_for_path(args.config)
-        mon = cfgfile.get_parent().monitor_directory(Gio.FileMonitorFlags.NONE, None)
+    # Auto-reload when the config file changes. Watch the directory to catch editor
+    # rename-saves, and for a symlinked config also the target's directory: editing the
+    # target (e.g. in a dotfiles repo) does not touch the link's directory at all.
+    def on_change(_m, changed, _o, _e, name):
+        if changed and changed.get_basename() == name:
+            if state.get("reload_timer"):
+                GLib.source_remove(state["reload_timer"])
+            state["reload_timer"] = GLib.timeout_add(
+                300, lambda: (state.pop("reload_timer", None), rebuild())[1]
+            )
 
-        def on_change(_m, changed, _o, _e):
-            if changed and changed.get_basename() == cfgfile.get_basename():
-                if state.get("reload_timer"):
-                    GLib.source_remove(state["reload_timer"])
-                state["reload_timer"] = GLib.timeout_add(
-                    300, lambda: (state.pop("reload_timer", None), rebuild())[1]
-                )
-
-        mon.connect("changed", on_change)
-        state["monitor"] = mon
-    except GLib.Error:
-        pass
+    state["monitors"] = []
+    for watched in dict.fromkeys((os.path.abspath(args.config), os.path.realpath(args.config))):
+        try:
+            folder = Gio.File.new_for_path(os.path.dirname(watched))
+            mon = folder.monitor_directory(Gio.FileMonitorFlags.NONE, None)
+        except GLib.Error:
+            continue
+        mon.connect("changed", on_change, os.path.basename(watched))
+        state["monitors"].append(mon)
 
     loop.run()
     if state.get("dictation"):

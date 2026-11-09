@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Settings window: tap the new `⚙` button (`{"action": "settings"}`, appended to the
+  default set) or run `kde-keybar --settings [general|dictation|buttons]` to edit the config
+  in a plain GTK4 window with General, Dictation and Buttons tabs. Saving validates like
+  `--validate` (errors block, warnings don't), keeps unknown keys and key order, and writes
+  atomically to the symlink target so a config linked from a dotfiles repo stays a link.
+  The bar reloads right after a save; standalone `--settings` only signals running bars
+  when it saved the default config.
+
 - KWin script `kde-keybar-fit`: keeps the active window above the bar while it sits on top
   of the on-screen keyboard, so the bar no longer covers the bottom of the window (KWin only
   makes room for the keyboard itself). Installed and enabled by `just install`, shipped in
@@ -66,6 +74,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With a symlinked config, editing the target file (e.g. in a dotfiles repo) now reloads
+  the bar too; only the link's directory was watched before.
+- A partial `keyboard_height_fraction` (only `portrait` or only `landscape`) takes the
+  missing one from the defaults instead of dropping to a fixed 320 px margin.
 - The bar re-positions itself when the screen rotates (it kept the old orientation's
   margin until restarted).
 - `--reload` only signals kde-keybar processes, not every process that has
@@ -77,6 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shows `mic silent` instead.
 
 ### Changed
+
+- The bar's theme stylesheet is scoped to the bar window, so it no longer styles other
+  windows of the same process (the settings window).
 
 - With `overflow: "scroll"` the bar no longer draws a horizontal scrollbar over the keys.
   It still scrolls by swiping or with the mouse wheel (the scrollbar is hidden in CSS;
