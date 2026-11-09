@@ -44,6 +44,7 @@ default:
     row uninstall      "Remove installed files (sudo)"
     row setup-ydotool  "Install ydotool + enable ydotoold.service"
     row setup-dictation "Build whisper-cli + download a model for the 🎤 button"
+    row setup-wakeword "Vosk venv + model for the dictation wake word"
     printf '\n'
 
 # ---- Dev -------------------------------------------------------------------
@@ -72,7 +73,7 @@ fmt-check:
 
 # Lint, format-check, and Python syntax check.
 check: lint fmt-check
-    python3 -m py_compile kde-keybar
+    python3 -m py_compile kde-keybar kde-keybar-wake
 
 # ---- Build & Package -------------------------------------------------------
 
@@ -155,6 +156,11 @@ doctor:
     [ -f "$model" ] && ok "default model" || warn "no default model (run: just setup-dictation)"
     command -v wl-copy >/dev/null 2>&1 && ok "wl-copy" || warn "wl-copy missing (only needed for output \"paste\")"
 
+    printf '%sWake word (optional)%s\n' "$d" "$z"
+    data="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar"
+    "$data/wake-venv/bin/python" -c "import vosk" 2>/dev/null && ok "vosk venv" || warn "no vosk venv (run: just setup-wakeword)"
+    [ -f "$data/models/vosk-model-small-en-us-0.15/am/final.mdl" ] && ok "default Vosk model" || warn "no default Vosk model (run: just setup-wakeword)"
+
     printf '\n'
     if [ "$miss" = 1 ]; then
         if command -v dnf >/dev/null 2>&1; then
@@ -173,6 +179,7 @@ install:
     #!/usr/bin/env sh
     set -eu
     sudo install -Dm0755 kde-keybar /usr/bin/kde-keybar
+    sudo install -Dm0755 kde-keybar-wake /usr/bin/kde-keybar-wake
     sudo install -Dm0644 data/kde-keybar.desktop /etc/xdg/autostart/kde-keybar.desktop
     sudo install -Dm0644 data/ydotoold.service /usr/lib/systemd/system/ydotoold.service
     sudo install -Dm0644 data/kde-keybar.service /usr/lib/systemd/user/kde-keybar.service
@@ -211,7 +218,7 @@ uninstall:
     kpackagetool6 --type=KWin/Script --remove kde-keybar-fit >/dev/null 2>&1 || true
     kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled --delete 2>/dev/null || true
     dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
-    sudo rm -f /usr/bin/kde-keybar
+    sudo rm -f /usr/bin/kde-keybar /usr/bin/kde-keybar-wake
     sudo rm -f /etc/xdg/autostart/kde-keybar.desktop
     sudo rm -f /usr/lib/systemd/system/ydotoold.service
     sudo rm -f /usr/lib/systemd/user/kde-keybar.service
@@ -335,3 +342,44 @@ setup-dictation MODEL="base.en" WHISPER_VERSION="v1.7.6":
         echo "Point the config at it: \"dictation\": { \"model\": \"$file\" }"
     fi
     command -v parecord >/dev/null 2>&1 || echo "Missing parecord: install pulseaudio-utils."
+
+# Vosk isn't packaged on Fedora, so it lives in a per-user venv the bar runs the helper with.
+# Create the wake-word venv (Vosk) and download a small Vosk model (~40 MB) for dictation.wake_word.
+setup-wakeword MODEL="vosk-model-small-en-us-0.15":
+    #!/usr/bin/env sh
+    set -eu
+    data="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar"
+    venv="$data/wake-venv"
+    if [ -x "$venv/bin/python" ] && "$venv/bin/python" -c "import vosk" 2>/dev/null; then
+        echo "Wake-word venv already set up: $venv"
+    else
+        mkdir -p "$data"
+        if command -v uv >/dev/null 2>&1; then
+            uv venv --quiet --python "$(command -v python3)" "$venv"
+            uv pip install --quiet --python "$venv/bin/python" vosk
+        else
+            python3 -m venv "$venv"
+            "$venv/bin/python" -m pip install --quiet vosk
+        fi
+        echo "Installed vosk into $venv"
+    fi
+    dir="$data/models"
+    if [ -f "$dir/{{MODEL}}/am/final.mdl" ]; then
+        echo "Model already present: $dir/{{MODEL}}"
+    else
+        mkdir -p "$dir"
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        echo "Downloading {{MODEL}}.zip ..."
+        curl -fL --progress-bar -o "$tmp/model.zip" "https://alphacephei.com/vosk/models/{{MODEL}}.zip"
+        mkdir "$tmp/x"
+        python3 -I -m zipfile -e "$tmp/model.zip" "$tmp/x"
+        [ -f "$tmp/x/{{MODEL}}/am/final.mdl" ] || { echo "Unexpected archive layout"; exit 1; }
+        rm -rf "$dir/{{MODEL}}"
+        mv "$tmp/x/{{MODEL}}" "$dir/{{MODEL}}"
+        echo "Saved: $dir/{{MODEL}}"
+    fi
+    if [ "{{MODEL}}" != "vosk-model-small-en-us-0.15" ]; then
+        echo "Point the config at it: \"wake_word\": { \"model\": \"$dir/{{MODEL}}\" }"
+    fi
+    echo "Enable it with \"dictation\": { \"wake_word\": { \"enabled\": true } }"

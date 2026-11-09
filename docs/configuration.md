@@ -25,7 +25,7 @@ defaults on first run, and any keys you omit fall back to those defaults. Change
 | `style` | object | `{}` | Overrides individual theme keys (see [theming](#theming)). |
 | `buttons` | array | see below | List of buttons. Each entry is `{ "label": "<text>", "keys": ["<NAME>", …] }`, `{ "label": "Ctrl", "modifier": "LCTRL" }` for a [one-shot modifier](#one-shot-ctrl--alt), or `{ "label": "🎤", "action": "dictate" }` for the [dictation](#dictation) button. |
 | `modifier_keys` | array | A–Z, arrows, Tab, ⏎, digits, symbols | Keys offered after tapping a `modifier` button. |
-| `dictation` | object | see [dictation](#dictation) | Recorder, speech model, and output settings for the dictation button. |
+| `dictation` | object | see [dictation](#dictation) | Recorder, speech model, and output settings for the dictation button, plus the optional [wake word](#wake-word). |
 
 ## Buttons and key chords
 
@@ -162,6 +162,59 @@ through a small wrapper script:
 
 Run `just doctor` to check the dictation dependencies. Errors (missing model, recorder, or CLI)
 flash briefly on the button and are logged on stderr (`journalctl --user -u kde-keybar`).
+
+### Wake word
+
+Say a phrase instead of tapping 🎤. Set it up once with `just setup-wakeword` (a Vosk venv and
+a ~40 MB English model, see [installation](installation.md#wake-word-optional)), then enable it:
+
+```json
+{
+  "dictation": {
+    "wake_word": {
+      "enabled": true,
+      "phrase": "start dictation",
+      "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
+      "python": "~/.local/share/kde-keybar/wake-venv/bin/python"
+    }
+  }
+}
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `enabled` | `false` | Start the listener. Off by default because it keeps the microphone open. |
+| `phrase` | `"start dictation"` | Word or phrase to listen for. Every word must be in the model's vocabulary; the helper says so on stderr if one isn't. |
+| `model` | `~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15` | Vosk model directory. Any [Vosk model](https://alphacephei.com/vosk/models) works; the small ones are plenty for a single phrase. |
+| `python` | `~/.local/share/kde-keybar/wake-venv/bin/python` | Interpreter that has `vosk` installed. |
+
+How it behaves:
+
+- When the phrase is heard and dictation is idle, a recording starts exactly as if you had
+  tapped 🎤, and the usual silence auto-stop ends it, transcribes, and types the text. Saying the
+  phrase while recording or transcribing does nothing.
+- If you say nothing within 5 s after the phrase, the recording is dropped (`no speech` flashes on
+  the button). That keeps a false trigger from recording for `max_seconds`.
+- It keeps listening whether or not the bar is visible: dictation types into the focused window
+  either way, so you can use it with the on-screen keyboard closed.
+- Leave a short pause after the phrase. It is usually spotted right as you finish saying it,
+  but the recorder needs a moment to start, and words spoken before that are lost. If the bar is
+  visible, the button turning red is your cue.
+
+**Choosing a phrase.** The helper restricts Vosk to just the phrase plus a catch-all, which makes
+it cheap but also pulls everything said towards the phrase. On ~3 minutes of ordinary synthetic
+(espeak) sentences, the single word `computer` fired 10 times ("compile", "commutes", "computing"
+all count), `hey computer` and `okay computer` twice each, and `start dictation` never. A false
+trigger during conversation would record and type what you say next, so pick two fairly long
+words you would not say in passing; `kde-keybar --validate` warns about one-word phrases.
+
+**Privacy and cost.** While `enabled` is true the microphone is open all the time, as long as the
+bar is running (PipeWire/Plasma show the mic as in use). Audio never leaves the machine and is not
+written to disk; the helper only prints a line when it hears the phrase. On an i7-1185G7 the helper
+used about 5-7% of one core while listening (measured on 30 s of silence and of speech at
+real-time pace), plus ~1.5 s of CPU and ~165 MB of RAM to load the model. It restarts with a
+growing delay if it crashes; if the venv or model is missing, `no wake` flashes on 🎤 once and the
+reason is logged, and it tries again on the next config change.
 
 ## Theming
 

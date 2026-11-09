@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""
+kde-keybar-wake: listen on the microphone and print "wake" each time a wake phrase is heard.
+
+kde-keybar starts this helper when dictation.wake_word.enabled is true and begins a
+dictation on every "wake" line. It runs with the interpreter of a venv that has Vosk
+(`just setup-wakeword`), so the bar itself never imports Vosk.
+
+The recognizer gets a grammar of only [phrase, "[unk]"]: everything that isn't the phrase
+collapses into [unk], which keeps decoding cheap and makes the phrase the only thing it
+can report. That also means everything gets forced towards the phrase, so a single word
+fires on lots of ordinary speech; two-word phrases hold up far better. Hits are taken from
+partial results for low latency, but only once the phrase has stayed in the partial for
+STABLE_CHUNKS in a row (a final result counts at once): early partials flicker, and that
+alone removes a good share of false hits. After a hit the recognizer is reset and further
+hits are ignored for a short debounce window.
+
+Exit status 3 means a setup problem (no Vosk, no model, no recorder); retrying won't help.
+"""
+
+import argparse
+import json
+import os
+import signal
+import subprocess
+import sys
+
+RATE = 16000
+CHUNK = RATE // 10 * 2  # 100 ms of s16le mono
+DEBOUNCE_S = 1.5  # one utterance of the phrase never fires twice
+STABLE_CHUNKS = 4  # partial results in a row (100 ms each) that must contain the phrase
+DEFAULT_PHRASE = "start dictation"
+SETUP_ERROR = 3
+DEFAULT_MODEL = "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15"
+RECORDERS = (
+    [
+        "parecord",
+        "--raw",
+        "--channels=1",
+        f"--rate={RATE}",
+        "--format=s16le",
+        "--latency-msec=50",
+    ],
+    ["pw-record", f"--rate={RATE}", "--channels=1", "--format=s16", "--latency=50ms", "-"],
+)
+
+
+def fail(msg, code=SETUP_ERROR):
+    print(f"kde-keybar-wake: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def words(text):
+    return text.lower().replace("[unk]", " ").split()
+
+
+def contains(haystack, needle):
+    n = len(needle)
+    return n > 0 and any(haystack[i : i + n] == needle for i in range(len(haystack) - n + 1))
+
+
+def open_recorder():
+    for argv in RECORDERS:
+        try:
+            return subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except FileNotFoundError:
+            continue
+    fail("no recorder found (install pulseaudio-utils for parecord, or pw-record)")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(
+        prog="kde-keybar-wake", description=__doc__.strip().splitlines()[0]
+    )
+    ap.add_argument(
+        "--phrase", default=DEFAULT_PHRASE, help=f"wake word or phrase (default: {DEFAULT_PHRASE})"
+    )
+    ap.add_argument("--model", default=DEFAULT_MODEL, help="Vosk model directory")
+    ap.add_argument(
+        "--stdin", action="store_true", help="read raw s16le 16 kHz mono from stdin (for tests)"
+    )
+    args = ap.parse_args(argv)
+
+    phrase = " ".join(args.phrase.lower().split())
+    if not phrase:
+        fail("--phrase is empty")
+    model_dir = os.path.expanduser(args.model)
+    if not os.path.isdir(model_dir):
+        fail(f"no Vosk model at {model_dir} (run: just setup-wakeword)")
+    try:
+        import vosk
+    except ImportError:
+        fail(f"vosk is not importable by {sys.executable} (run: just setup-wakeword)")
+
+    vosk.SetLogLevel(-1)
+    try:
+        model = vosk.Model(model_dir)
+    except Exception as e:  # vosk raises a bare Exception on a bad model dir
+        fail(f"could not load the Vosk model at {model_dir}: {e}")
+    # Vosk silently drops grammar words it doesn't know, which would leave a phrase that
+    # can never match. Say so instead of listening forever for nothing.
+    unknown = [w for w in phrase.split() if model.vosk_model_find_word(w) < 0]
+    if unknown:
+        fail(f"not in the model's vocabulary: {', '.join(unknown)}; pick other words")
+    rec = vosk.KaldiRecognizer(model, RATE, json.dumps([phrase, "[unk]"]))
+    target = phrase.split()
+
+    proc = None
+    if args.stdin:
+        src = sys.stdin.buffer
+    else:
+        proc = open_recorder()
+        src = proc.stdout
+    parent = os.getppid()
+
+    def bye(*_):
+        if proc:
+            proc.terminate()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
+
+    pos = 0  # bytes of audio consumed; the debounce runs on audio time so tests are exact
+    last_hit = None
+    streak = 0
+    while True:
+        data = src.read(CHUNK)
+        if not data:
+            break
+        pos += len(data)
+        # The bar went away without stopping us (crash, SIGKILL): don't keep the mic open.
+        if proc and os.getppid() != parent:
+            break
+        final = rec.AcceptWaveform(data)
+        if final:
+            text = json.loads(rec.Result()).get("text", "")
+        else:
+            text = json.loads(rec.PartialResult()).get("partial", "")
+        if not contains(words(text), target):
+            streak = 0
+            continue
+        streak += 1
+        if not final and streak < STABLE_CHUNKS:
+            continue
+        streak = 0
+        now = pos / (RATE * 2)
+        rec.Reset()
+        if last_hit is not None and now - last_hit < DEBOUNCE_S:
+            continue
+        last_hit = now
+        try:
+            print("wake", flush=True)
+        except BrokenPipeError:
+            break
+    if proc:
+        proc.terminate()
+        code = proc.wait()
+        if code not in (0, -signal.SIGTERM):
+            fail(f"recorder exited with status {code}", 1)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
