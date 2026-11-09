@@ -175,6 +175,7 @@ a ~40 MB English model, see [installation](installation.md#wake-word-optional)),
     "wake_word": {
       "enabled": true,
       "phrase": "hey scribe",
+      "listen": "always",
       "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
       "python": "~/.local/share/kde-keybar/wake-venv/bin/python"
     }
@@ -185,6 +186,7 @@ a ~40 MB English model, see [installation](installation.md#wake-word-optional)),
 | Key | Default | Description |
 | --- | --- | --- |
 | `enabled` | `false` | Start the listener. Off by default because it keeps the microphone open. |
+| `listen` | `"always"` | `"always"` listens for the whole session. `"keyboard"` listens only while the on-screen keyboard is open: the mic is closed and the helper stopped otherwise. It stops 3 s after the keyboard hides (so focus moving between fields doesn't restart it) and starts again when it opens, which takes ~1.5 s to load the model. |
 | `phrase` | `"hey scribe"` | Word or phrase to listen for. Every word must be in the model's vocabulary; the helper says so on stderr if one isn't. |
 | `model` | `~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15` | Vosk model directory. Any [Vosk model](https://alphacephei.com/vosk/models) works; the small ones are plenty for a single phrase. |
 | `python` | `~/.local/share/kde-keybar/wake-venv/bin/python` | Interpreter that has `vosk` installed. |
@@ -196,8 +198,9 @@ How it behaves:
   phrase while recording or transcribing does nothing.
 - If you say nothing within 5 s after the phrase, the recording is dropped (`no speech` flashes on
   the button). That keeps a false trigger from recording for `max_seconds`.
-- It keeps listening whether or not the bar is visible: dictation types into the focused window
-  either way, so you can use it with the on-screen keyboard closed.
+- With `listen: "always"` it keeps listening whether or not the bar is visible: dictation types
+  into the focused window either way, so you can use it with the on-screen keyboard closed.
+  `listen: "keyboard"` trades that for a closed mic and no CPU while the keyboard is hidden.
 - Leave a short pause after the phrase. It is usually spotted right as you finish saying it,
   but the recorder needs a moment to start, and words spoken before that are lost. If the bar is
   visible, the button turning red is your cue.
@@ -222,8 +225,8 @@ the partials. A false wake records and types what you say next, so pick "hey" pl
 would not otherwise say; `kde-keybar --validate` warns about one-word phrases. Avoid the phrase of
 an assistant you also own ("hey google"), or both will answer.
 
-**Privacy and cost.** While `enabled` is true the microphone is open all the time, as long as the
-bar is running (PipeWire/Plasma show the mic as in use). Audio never leaves the machine and is not
+**Privacy and cost.** While `enabled` is true the microphone is open all the time (with
+`listen: "keyboard"`, whenever the on-screen keyboard is open), as long as the bar is running (PipeWire/Plasma show the mic as in use). Audio never leaves the machine and is not
 written to disk; the helper only prints a line when it hears the phrase. On an i7-1185G7 the helper
 used about 6% of one core on silence and about 9% during speech (30 s of each at real-time
 pace), plus ~1.5 s of CPU and ~165 MB of RAM to load the model. It restarts with a

@@ -425,6 +425,9 @@ DEFAULT_CONFIG = {
         "wake_word": {
             "enabled": False,
             "phrase": "hey scribe",
+            # "always": listen for the whole session; "keyboard": only while the
+            # on-screen keyboard is open (mic closed, no CPU otherwise).
+            "listen": "always",
             "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
             "python": "~/.local/share/kde-keybar/wake-venv/bin/python",
         },
@@ -494,18 +497,49 @@ class Dictation:
         self.buttons = []  # (button, idle_label)
         self.woken = False  # this recording was started by the wake word
         self.wake = None  # WakeWord listener, when dictation.wake_word.enabled
+        self.wake_gave_up = False  # setup error: don't respawn on every keyboard show
+        self.kb_visible = None  # on-screen keyboard state, fed by the visibility watcher
+        self.kb_hide_timer = None
+
+    KB_HIDE_GRACE_S = 3  # keyboard must stay hidden this long before the mic closes
 
     def listen(self):
-        """Start the wake-word listener if it's enabled. Called once the window that
-        owns this instance is live, so a failed rebuild never leaves a helper behind."""
+        """Start or stop the wake-word listener to match the config and, with
+        listen: "keyboard", the on-screen keyboard. Called once the window that owns
+        this instance is live, so a failed rebuild never leaves a helper behind."""
         user = self.dc.get("wake_word")
         ww = {
             **DEFAULT_CONFIG["dictation"]["wake_word"],
             **(user if isinstance(user, dict) else {}),
         }
-        if ww.get("enabled") is True and self.wake is None:
+        want = ww.get("enabled") is True and (
+            ww.get("listen") != "keyboard" or self.kb_visible is True
+        )
+        if want and self.wake is None and not self.wake_gave_up:
             self.wake = WakeWord(self, ww)
             self.wake.start()
+        elif not want and self.wake is not None:
+            self.wake.stop()  # a recording it started carries on; only the mic closes
+            self.wake = None
+
+    def set_keyboard_visible(self, visible):
+        """Keyboard shown: listen now. Hidden: stop after a grace period, since the
+        keyboard briefly hides and reappears when focus moves between fields."""
+        if visible:
+            if self.kb_hide_timer:
+                GLib.source_remove(self.kb_hide_timer)
+                self.kb_hide_timer = None
+            self.kb_visible = True
+            self.listen()
+        elif self.kb_hide_timer is None and self.kb_visible is not False:
+
+            def hidden():
+                self.kb_hide_timer = None
+                self.kb_visible = False
+                self.listen()
+                return False
+
+            self.kb_hide_timer = GLib.timeout_add_seconds(self.KB_HIDE_GRACE_S, hidden)
 
     def wake_heard(self):
         # Only an idle bar reacts: the phrase said mid-dictation is just dictation.
@@ -789,6 +823,9 @@ class Dictation:
     def cancel(self):
         """Drop any in-flight recording and stop the wake-word listener (used when the
         window is rebuilt and on exit)."""
+        if self.kb_hide_timer:
+            GLib.source_remove(self.kb_hide_timer)
+            self.kb_hide_timer = None
         if self.wake:
             self.wake.stop()
             self.wake = None
@@ -843,6 +880,7 @@ class WakeWord:
         ]
 
     def _setup_error(self, why):
+        self.dictation.wake_gave_up = True
         self.dictation._flash("no wake")
         print(f"kde-keybar: wake word: {why}", file=sys.stderr)
 
@@ -1229,7 +1267,10 @@ def setup_visibility(state):
         win = state.get("win")
         if not win:
             return
-        visible = bool(state.get("always") or get_visible())
+        kb = get_visible()
+        if state.get("dictation"):
+            state["dictation"].set_keyboard_visible(kb)
+        visible = bool(state.get("always") or kb)
         if not visible and hasattr(win, "kde_keybar_show_layer"):
             win.kde_keybar_show_layer("main")  # a half-finished Ctrl+… does not linger
         win.set_visible(visible)
@@ -1371,6 +1412,8 @@ def validate_config_data(cfg):
                         warns.append(f"dictation.wake_word: unknown key '{k}'")
                 if "enabled" in ww and not isinstance(ww["enabled"], bool):
                     errs.append("dictation.wake_word.enabled must be true or false")
+                if ww.get("listen", "always") not in ("always", "keyboard"):
+                    errs.append('dictation.wake_word.listen must be "always" or "keyboard"')
                 ph = ww.get("phrase", DEFAULT_CONFIG["dictation"]["wake_word"]["phrase"])
                 if not isinstance(ph, str) or not ph.strip():
                     errs.append("dictation.wake_word.phrase must be a non-empty string")
@@ -1595,6 +1638,10 @@ DICTATION_FIELDS = [
     {"section": "Wake word", "key": "dictation.wake_word.enabled", "type": "bool",
      "label": "Listen for the wake phrase",
      "help": "Keeps the microphone open. Set up once with: just setup-wakeword"},
+    {"key": "dictation.wake_word.listen", "type": "choice", "label": "Listen",
+     "choices": ["always", "keyboard"],
+     "labels": ["Always", "Only while the on-screen keyboard is open"],
+     "help": "Keyboard-only closes the mic when it hides; waking takes ~1.5 s after it opens."},
     {"key": "dictation.wake_word.phrase", "type": "text", "label": "Phrase",
      "help": "Two or more words you wouldn't say in passing; one word false-triggers."},
     {"key": "dictation.wake_word.model", "type": "path", "folder": True,

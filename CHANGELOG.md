@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in both packages; `just doctor` checks the venv and model. A wake-started recording that hears
   nothing for 5 s is dropped.
 
+- Wake word `listen` setting (also in the settings window): `"always"` (default) or
+  `"keyboard"`, which runs the listener only while the on-screen keyboard is open, so the
+  mic is closed and nothing runs otherwise. Hiding stops it after 3 s, so the keyboard
+  flickering between fields doesn't restart it.
+
 - KWin script `kde-keybar-fit`: keeps the active window above the bar while it sits on top
   of the on-screen keyboard, so the bar no longer covers the bottom of the window (KWin only
   makes room for the keyboard itself). Installed and enabled by `just install`, shipped in
