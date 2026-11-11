@@ -6,7 +6,7 @@ target-version = "py311"
 line-length = 100
 
 # Make ruff pick up the extensionless main script in addition to *.py files.
-extend-include = ["kde-keybar"]
+extend-include = ["kde-keybar", "kde-keybar-wake"]
 
 [lint]
 # Pragmatic set for a single GTK script: pyflakes, pycodestyle, warnings,

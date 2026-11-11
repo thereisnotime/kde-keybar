@@ -12,11 +12,14 @@
   "margin_px": null,
   "keyboard_height_fraction": { "landscape": 0.30, "portrait": 0.24 },
   "ydotool_socket": "/run/ydotoold.socket",
+  "repeat_delay_ms": 400,
+  "repeat_interval_ms": 50,
   "theme": "dark",
   "style": {},
   "buttons": [
     { "label": "Esc",     "keys": ["ESC"] },
     { "label": "Tab",     "keys": ["TAB"] },
+    { "label": "Ctrl",    "modifier": "LCTRL" },
     { "label": "Alt+Tab", "keys": ["LALT", "TAB"] },
     { "label": "^C",      "keys": ["LCTRL", "C"] },
     { "label": "^B",      "keys": ["LCTRL", "B"] },
@@ -29,6 +32,26 @@
     { "label": "↓",       "keys": ["DOWN"] },
     { "label": "↑",       "keys": ["UP"] },
     { "label": "→",       "keys": ["RIGHT"] },
-    { "label": "⏎",       "keys": ["ENTER"] }
-  ]
+    { "label": "⏎",       "keys": ["ENTER"] },
+    { "label": "🎤",      "action": "dictate" },
+    { "label": "⚙",       "action": "settings" }
+  ],
+  "dictation": {
+    "record_command": ["parecord", "--channels=1", "--rate=16000", "--format=s16le", "--file-format=wav", "--latency-msec=50", "{wav}"],
+    "transcribe_command": ["whisper-cli", "-m", "{model}", "-f", "{wav}", "-l", "{language}", "-ac", "{audio_ctx}", "-bs", "1", "-bo", "1", "-nt", "-np"],
+    "model": "~/.local/share/kde-keybar/models/ggml-base.en.bin",
+    "language": "en",
+    "output": "type",
+    "paste_keys": ["LCTRL", "V"],
+    "max_seconds": 120,
+    "silence_stop_seconds": 1.5,
+    "silence_level": 300,
+    "wake_word": {
+      "enabled": false,
+      "phrase": "hey scribe",
+      "listen": "always",
+      "model": "~/.local/share/kde-keybar/models/vosk-model-small-en-us-0.15",
+      "python": "~/.local/share/kde-keybar/wake-venv/bin/python"
+    }
+  }
 }

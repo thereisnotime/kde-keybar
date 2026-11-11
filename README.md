@@ -34,7 +34,10 @@ You keep using your normal on-screen keyboard for typing, and kde-keybar gives y
 - Layer-shell overlay that never steals focus from your text field.
 - 15 built-in themes plus full color/transparency overrides.
 - Optional always-on dock mode that reserves space like a panel.
+- Offline dictation button: tap 🎤, talk, tap again, and the text is typed into the focused window. Transcription runs locally with an open model (whisper.cpp by default, any CLI works).
+- Optional wake word: say "hey scribe" instead of tapping 🎤 (local Vosk, `just setup-wakeword`).
 - Live config reload: edit the JSON, save, the bar updates.
+- Settings window (⚙ on the bar, or `kde-keybar --settings`) to change options and buttons by touch, no JSON needed. Keeps a symlinked config a symlink.
 - Small single-file Python script.
 
 ## Quick start
@@ -49,6 +52,12 @@ just install
 just setup-ydotool
 ```
 
+For the dictation button, build whisper.cpp and fetch a model (needs `git cmake gcc-c++`):
+
+```sh
+just setup-dictation         # builds whisper-cli into ~/.local/bin, downloads ggml-base.en.bin (~140 MB)
+```
+
 Then pick an on-screen keyboard in System Settings (Keyboard, Virtual Keyboard) and the bar shows above it. Prebuilt `.rpm`/`.deb` packages are on the [releases page](https://github.com/thereisnotime/kde-keybar/releases).
 
 Full details: **[docs/installation.md](docs/installation.md)**.
@@ -56,8 +65,9 @@ Full details: **[docs/installation.md](docs/installation.md)**.
 ## Documentation
 
 - **[Installation](docs/installation.md)** — requirements, packages, source, ydotool setup.
-- **[Configuration](docs/configuration.md)** — every config key, buttons and key chords, theming, commands, live reload, dock mode.
+- **[Configuration](docs/configuration.md)** — every config key, buttons and key chords, dictation, theming, commands, live reload, dock mode.
 - **[Troubleshooting](docs/troubleshooting.md)** — the bar not appearing, buttons doing nothing, and other common cases.
+- **[Maliit patches](docs/maliit.md)** — optional tweaks to the Maliit on-screen keyboard: hide key, no space long-press, compact size, terminal rows.
 - **[Compatibility](docs/compatibility.md)** — KDE, wlroots, GNOME/X11, and companion keyboards.
 - **[Examples](examples/)** — ready-to-use configs (minimal, dock, transparent, zellij, vim).
 

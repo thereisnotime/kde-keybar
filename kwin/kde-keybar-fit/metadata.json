@@ -1,0 +1,14 @@
+{
+    "KPlugin": {
+        "Id": "kde-keybar-fit",
+        "Name": "kde-keybar fit",
+        "Description": "Keeps the active window above kde-keybar when the bar sits on top of the on-screen keyboard.",
+        "Authors": [{ "Name": "thereisnotime" }],
+        "License": "MIT",
+        "Version": "0.1.0",
+        "EnabledByDefault": false
+    },
+    "X-Plasma-API": "javascript",
+    "X-Plasma-MainScript": "code/main.js",
+    "KPackageStructure": "KWin/Script"
+}

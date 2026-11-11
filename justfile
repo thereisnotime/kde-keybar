@@ -43,6 +43,8 @@ default:
     row install        "Install to system paths (sudo)"
     row uninstall      "Remove installed files (sudo)"
     row setup-ydotool  "Install ydotool + enable ydotoold.service"
+    row setup-dictation "Build whisper-cli + download a model for the 🎤 button"
+    row setup-wakeword "Vosk venv + model for the dictation wake word"
     printf '\n'
 
 # ---- Dev -------------------------------------------------------------------
@@ -71,7 +73,7 @@ fmt-check:
 
 # Lint, format-check, and Python syntax check.
 check: lint fmt-check
-    python3 -m py_compile kde-keybar
+    python3 -m py_compile kde-keybar kde-keybar-wake
 
 # ---- Build & Package -------------------------------------------------------
 
@@ -147,6 +149,18 @@ doctor:
     fi
     [ -S /run/ydotoold.socket ] && ok "/run/ydotoold.socket" || warn "/run/ydotoold.socket missing"
 
+    printf '%sDictation (optional)%s\n' "$d" "$z"
+    command -v parecord >/dev/null 2>&1 && ok "parecord" || warn "parecord missing (pulseaudio-utils)"
+    command -v whisper-cli >/dev/null 2>&1 && ok "whisper-cli" || warn "whisper-cli missing (run: just setup-dictation)"
+    model="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar/models/ggml-base.en.bin"
+    [ -f "$model" ] && ok "default model" || warn "no default model (run: just setup-dictation)"
+    command -v wl-copy >/dev/null 2>&1 && ok "wl-copy" || warn "wl-copy missing (only needed for output \"paste\")"
+
+    printf '%sWake word (optional)%s\n' "$d" "$z"
+    data="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar"
+    "$data/wake-venv/bin/python" -c "import vosk" 2>/dev/null && ok "vosk venv" || warn "no vosk venv (run: just setup-wakeword)"
+    [ -f "$data/models/vosk-model-small-en-us-0.15/am/final.mdl" ] && ok "default Vosk model" || warn "no default Vosk model (run: just setup-wakeword)"
+
     printf '\n'
     if [ "$miss" = 1 ]; then
         if command -v dnf >/dev/null 2>&1; then
@@ -165,6 +179,7 @@ install:
     #!/usr/bin/env sh
     set -eu
     sudo install -Dm0755 kde-keybar /usr/bin/kde-keybar
+    sudo install -Dm0755 kde-keybar-wake /usr/bin/kde-keybar-wake
     sudo install -Dm0644 data/kde-keybar.desktop /etc/xdg/autostart/kde-keybar.desktop
     sudo install -Dm0644 data/ydotoold.service /usr/lib/systemd/system/ydotoold.service
     sudo install -Dm0644 data/kde-keybar.service /usr/lib/systemd/user/kde-keybar.service
@@ -174,6 +189,14 @@ install:
     systemctl --user stop 'app-kde\x2dkeybar@autostart.service' 2>/dev/null || true
     systemctl --user daemon-reload
     systemctl --user enable --now kde-keybar.service
+    # KWin script that keeps the active window above the bar while it sits on top of
+    # the on-screen keyboard. Per-user install, so no sudo; enabled in kwinrc.
+    if command -v kpackagetool6 >/dev/null 2>&1; then
+        kpackagetool6 --type=KWin/Script --upgrade kwin/kde-keybar-fit >/dev/null 2>&1 \
+            || kpackagetool6 --type=KWin/Script --install kwin/kde-keybar-fit >/dev/null
+        kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled true
+        dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+    fi
     cfg="${XDG_CONFIG_HOME:-$HOME/.config}/kde-keybar.json"
     if [ -e "$cfg" ]; then
         echo "Config already exists, leaving it alone: $cfg"
@@ -192,7 +215,10 @@ uninstall:
     #!/usr/bin/env sh
     set -eu
     systemctl --user disable --now kde-keybar.service 2>/dev/null || true
-    sudo rm -f /usr/bin/kde-keybar
+    kpackagetool6 --type=KWin/Script --remove kde-keybar-fit >/dev/null 2>&1 || true
+    kwriteconfig6 --file kwinrc --group Plugins --key kde-keybar-fitEnabled --delete 2>/dev/null || true
+    dbus-send --session --dest=org.kde.KWin /KWin org.kde.KWin.reconfigure 2>/dev/null || true
+    sudo rm -f /usr/bin/kde-keybar /usr/bin/kde-keybar-wake
     sudo rm -f /etc/xdg/autostart/kde-keybar.desktop
     sudo rm -f /usr/lib/systemd/system/ydotoold.service
     sudo rm -f /usr/lib/systemd/user/kde-keybar.service
@@ -221,3 +247,139 @@ setup-ydotool:
         echo "  Edit /usr/lib/systemd/system/ydotoold.service so --socket-own=${uid}:${gid},"
         echo "  then run: sudo systemctl daemon-reload && sudo systemctl restart ydotoold.service"
     fi
+
+# Pick patches by prefix, e.g. `just setup-maliit 10 20 30`. Installs a dnf hook (when
+# libdnf5-plugin-actions is present) that re-applies them after maliit-keyboard updates.
+# Patch the Maliit on-screen keyboard (needs sudo; see docs/maliit.md).
+setup-maliit *PATCHES:
+    #!/usr/bin/env sh
+    set -eu
+    src="$PWD/maliit"
+    # sudo needs a terminal; without one (e.g. run from an IDE or agent) use pkexec's
+    # graphical prompt. Everything runs as one root step, so it asks once.
+    if [ -t 0 ]; then asroot=sudo; else asroot=pkexec; fi
+    $asroot sh -c '
+        set -eu
+        src=$1; shift
+        dst=/usr/share/kde-keybar/maliit
+        install -d "$dst/patches/lib" "$dst/patches/share"
+        install -m0755 "$src/apply.sh" "$dst/apply.sh"
+        install -m0644 "$src"/patches/lib/*.patch "$dst/patches/lib/"
+        install -m0644 "$src"/patches/share/*.patch "$dst/patches/share/"
+        "$dst/apply.sh" "$@"
+        hooks=/etc/dnf/libdnf5-plugins/actions.d
+        if [ -d "$hooks" ]; then
+            echo "post_transaction:maliit-keyboard:in::$dst/apply.sh $*" > "$hooks/kde-keybar-maliit.actions"
+            echo "dnf hook installed: patches are re-applied after maliit-keyboard updates."
+        else
+            echo "To re-apply automatically after updates: dnf install libdnf5-plugin-actions,"
+            echo "then run this recipe again."
+        fi
+    ' sh "$src" {{PATCHES}}
+
+# Show which Maliit patches are applied.
+maliit-status:
+    maliit/apply.sh --status
+
+# Undo the Maliit patches and remove the dnf hook (needs sudo).
+revert-maliit:
+    #!/usr/bin/env sh
+    set -eu
+    sudo maliit/apply.sh --revert
+    sudo rm -f /etc/dnf/libdnf5-plugins/actions.d/kde-keybar-maliit.actions
+    sudo rm -rf /usr/share/kde-keybar/maliit
+
+# Build whisper-cli from source into ~/.local/bin and download a model (base.en ~140 MB; also tiny.en, small.en, ...).
+setup-dictation MODEL="base.en" WHISPER_VERSION="v1.7.6":
+    #!/usr/bin/env sh
+    set -eu
+    bindir="$HOME/.local/bin"
+    if command -v whisper-cli >/dev/null 2>&1 && [ -z "${REBUILD:-}" ]; then
+        echo "whisper-cli already installed: $(command -v whisper-cli) (REBUILD=1 to rebuild)"
+    else
+        for t in git cmake make g++; do
+            command -v "$t" >/dev/null 2>&1 || { echo "Missing $t (Fedora: sudo dnf install git cmake make gcc-c++)"; exit 1; }
+        done
+        src="${XDG_CACHE_HOME:-$HOME/.cache}/kde-keybar/whisper.cpp"
+        if [ -d "$src/.git" ]; then
+            git -C "$src" fetch --depth 1 origin tag {{WHISPER_VERSION}}
+            git -C "$src" checkout -q {{WHISPER_VERSION}}
+        else
+            mkdir -p "$(dirname "$src")"
+            git clone --depth 1 --branch {{WHISPER_VERSION}} https://github.com/ggml-org/whisper.cpp "$src"
+        fi
+        # Vulkan runs the encoder on the GPU (Intel/AMD/NVIDIA), several times faster
+        # than CPU on laptops. Needs glslc + Vulkan headers; falls back to CPU otherwise.
+        gpu=OFF
+        if command -v glslc >/dev/null 2>&1 && [ -f /usr/include/vulkan/vulkan.h ]; then
+            gpu=ON
+        else
+            echo "Note: building CPU-only. For a GPU build: sudo dnf install glslc vulkan-headers vulkan-loader-devel"
+            echo "      (Debian/Ubuntu: glslc libvulkan-dev), then: REBUILD=1 just setup-dictation"
+        fi
+        echo "Building whisper.cpp {{WHISPER_VERSION}} (static, Vulkan=$gpu) ..."
+        rm -rf "$src/build"
+        cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DGGML_VULKAN=$gpu >/dev/null
+        cmake --build "$src/build" --target whisper-cli -j "$(nproc)"
+        install -Dm0755 "$src/build/bin/whisper-cli" "$bindir/whisper-cli"
+        echo "Installed: $bindir/whisper-cli"
+        case ":$PATH:" in *":$bindir:"*) ;; *) echo "Note: $bindir is not on PATH; set dictation.transcribe_command to the full path." ;; esac
+    fi
+    dir="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar/models"
+    file="$dir/ggml-{{MODEL}}.bin"
+    mkdir -p "$dir"
+    if [ -f "$file" ]; then
+        echo "Model already present: $file"
+    else
+        echo "Downloading ggml-{{MODEL}}.bin ..."
+        curl -fL --progress-bar -o "$file.part" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{{MODEL}}.bin"
+        mv "$file.part" "$file"
+        echo "Saved: $file"
+    fi
+    if [ "{{MODEL}}" != "base.en" ]; then
+        echo "Point the config at it: \"dictation\": { \"model\": \"$file\" }"
+    fi
+    command -v parecord >/dev/null 2>&1 || echo "Missing parecord: install pulseaudio-utils."
+
+# Vosk isn't packaged on Fedora, so it lives in a per-user venv the bar runs the helper with.
+# Create the wake-word venv (Vosk) and download a small Vosk model (~40 MB) for dictation.wake_word.
+setup-wakeword MODEL="vosk-model-small-en-us-0.15":
+    #!/usr/bin/env sh
+    set -eu
+    data="${XDG_DATA_HOME:-$HOME/.local/share}/kde-keybar"
+    venv="$data/wake-venv"
+    if [ -x "$venv/bin/python" ] && "$venv/bin/python" -c "import vosk" 2>/dev/null; then
+        echo "Wake-word venv already set up: $venv"
+    else
+        mkdir -p "$data"
+        if command -v uv >/dev/null 2>&1; then
+            uv venv --quiet --python "$(command -v python3)" "$venv"
+            uv pip install --quiet --python "$venv/bin/python" vosk
+        else
+            python3 -m venv "$venv"
+            "$venv/bin/python" -m pip install --quiet vosk
+        fi
+        echo "Installed vosk into $venv"
+    fi
+    dir="$data/models"
+    if [ -f "$dir/{{MODEL}}/am/final.mdl" ]; then
+        echo "Model already present: $dir/{{MODEL}}"
+    else
+        mkdir -p "$dir"
+        tmp=$(mktemp -d)
+        trap 'rm -rf "$tmp"' EXIT
+        echo "Downloading {{MODEL}}.zip ..."
+        curl -fL --progress-bar -o "$tmp/model.zip" "https://alphacephei.com/vosk/models/{{MODEL}}.zip"
+        mkdir "$tmp/x"
+        python3 -I -m zipfile -e "$tmp/model.zip" "$tmp/x"
+        [ -f "$tmp/x/{{MODEL}}/am/final.mdl" ] || { echo "Unexpected archive layout"; exit 1; }
+        rm -rf "$dir/{{MODEL}}"
+        mv "$tmp/x/{{MODEL}}" "$dir/{{MODEL}}"
+        echo "Saved: $dir/{{MODEL}}"
+    fi
+    if [ "{{MODEL}}" != "vosk-model-small-en-us-0.15" ]; then
+        echo "Point the config at it: \"wake_word\": { \"model\": \"$dir/{{MODEL}}\" }"
+    fi
+    echo "Enable it with \"dictation\": { \"wake_word\": { \"enabled\": true } }"
